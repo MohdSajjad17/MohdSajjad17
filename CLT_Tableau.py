@@ -1,77 +1,48 @@
 import streamlit as st
-import tableauserverclient as TSC
+import requests
+import pandas as pd
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.title("🔐 Connect to Tableau Server / Cloud (via Tableau Server Client)")
+st.title("📊 Tableau Site Users Viewer")
 
-server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
-site_content_url = st.text_input("Site Content URL (leave empty for Default site)", "zubermohd006-fa3eb7239f")
+# User inputs
+server_url = st.text_input("Server URL", placeholder="https://your-server.com")
+site_id = st.text_input("Site ID")
+token = st.text_input("Auth Token", type="password")
 
-auth_method = st.selectbox("Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
+if st.button("Fetch Users"):
+    if not server_url or not site_id or not token:
+        st.warning("Please fill in all fields.")
+    else:
+        headers = {
+            'X-Tableau-Auth': token
+        }
 
-# Choose authentication method
-if auth_method == "PAT (Personal Access Token)":
-    token_name = st.text_input("PAT Name")
-    token_value = st.text_input("PAT Secret", type="password")
+        page_number = 1
+        page_size = 1000
+        all_users = []
 
-    if st.button("🔌 Connect with PAT"):
-        try:
-            tableau_auth = TSC.PersonalAccessTokenAuth(
-                token_name=token_name,
-                personal_access_token=token_value,
-                site_id=site_content_url
-            )
-            st.info(f"🔄 Signing in with PAT to {server_url}...")
+        with st.spinner("Fetching users..."):
+            while True:
+                url = f'{server_url}/api/3.22/sites/{site_id}/users?pageSize={page_size}&pageNumber={page_number}'
+                response = requests.get(url, headers=headers)
 
-            server = TSC.Server(server_url, use_server_version=True)
-            server.auth.sign_in(tableau_auth)
+                if response.status_code != 200:
+                    st.error(f"Failed to fetch users: {response.status_code} - {response.text}")
+                    break
 
-            # Use the auth token to get the user details (alternate approach)
-            users, pagination_item = server.users.get()
-            user = next((u for u in users if u.id == server.auth.token), None)  # Match based on token
-            server_info = server.server_info.get()
+                data = response.json()
+                users = data['users']['user']
+                all_users.extend(users)
 
-            if user:
-                st.success("✅ Successfully connected!")
-                st.write(f"📡 Server version: {server_info.product_version}")
-                st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
-                st.write(f"🔐 Site ID: {server.site_id}")
-            else:
-                st.error("❌ User not found.")
+                total_available = int(data['pagination']['totalAvailable'])
+                if page_number * page_size >= total_available:
+                    break
+                page_number += 1
 
-            server.auth.sign_out()
-
-        except Exception as e:
-            st.error(f"❌ Connection failed: {str(e)}")
-
-else:
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("🔌 Connect with Username & Password"):
-        try:
-            tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
-            st.info(f"🔄 Signing in with username to {server_url}...")
-
-            server = TSC.Server(server_url, use_server_version=True)
-            server.auth.sign_in(tableau_auth)
-
-            # Use the auth token to get the user details (alternate approach)
-            users, pagination_item = server.users.get()
-            user = next((u for u in users if u.id == server.auth.token), None)  # Match based on token
-            server_info = server.server_info.get()
-
-            if user:
-                st.success("✅ Successfully connected!")
-                st.write(f"📡 Server version: {server_info.product_version}")
-                st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
-                st.write(f"🔐 Site ID: {server.site_id}")
-            else:
-                st.error("❌ User not found.")
-
-            server.auth.sign_out()
-
-        except Exception as e:
-            st.error(f"❌ Connection failed: {str(e)}")
+        if all_users:
+            df = pd.DataFrame(all_users)
+            df = df[["name", "fullName", "email", "siteRole"]]
+            st.success(f"Fetched {len(df)} users.")
+            st.dataframe(df)
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("Download CSV", csv, "tableau_users.csv", "text/csv")
