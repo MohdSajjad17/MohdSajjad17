@@ -28,8 +28,8 @@ if auth_method == "PAT (Personal Access Token)":
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Get user details
-            user = server.auth.user
+            # Fetch the authenticated user
+            user = server.users.get_by_id(server.auth.user_id)
             server_info = server.server_info.get()
 
             st.success("✅ Successfully connected!")
@@ -54,8 +54,8 @@ else:
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Get user details
-            user = server.auth.user
+            # Fetch the authenticated user
+            user = server.users.get_by_id(server.auth.user_id)
             server_info = server.server_info.get()
 
             st.success("✅ Successfully connected!")
