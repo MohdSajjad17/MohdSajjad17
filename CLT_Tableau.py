@@ -14,7 +14,7 @@ site_content_url = st.text_input("Site Content URL (Leave empty for Default site
 auth_method = st.selectbox("Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
 
 # ------------------------
-# Helper Function to Export CSVs
+# Helper: CSV Download Function
 # ------------------------
 def to_csv_download(data: list, headers: list, filename: str, label: str):
     df = pd.DataFrame(data, columns=headers)
@@ -29,6 +29,12 @@ def export_users(server):
     data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
     headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
     to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
+
+def export_groups(server):
+    groups, _ = server.groups.get()
+    data = [[g.name, g.id] for g in groups]
+    headers = ["Group Name", "Group ID"]
+    to_csv_download(data, headers, "groups.csv", "⬇️ Download Groups")
 
 def export_projects(server):
     projects, _ = server.projects.get()
@@ -57,9 +63,10 @@ def connect_and_export(tableau_auth):
         server.auth.sign_in(tableau_auth)
         st.success("✅ Connected successfully!")
 
-        # Export options
+        # Export content
         with st.expander("📋 Export Tableau Content"):
             export_users(server)
+            export_groups(server)
             export_projects(server)
             export_workbooks(server)
             export_datasources(server)
@@ -70,7 +77,7 @@ def connect_and_export(tableau_auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Auth Options UI
+# Auth Flow UI
 # ------------------------
 if auth_method == "PAT (Personal Access Token)":
     token_name = st.text_input("PAT Name")
