@@ -1,53 +1,49 @@
+import streamlit as st
 import tableauserverclient as TSC
 
 # ------------------------
-# Credentials
+# Streamlit UI Setup
 # ------------------------
+st.title("🔐 Connect to Tableau Server / Cloud")
 
-# Set up your Tableau Server URL and Site
-server_url = "https://prod-apsoutheast-b.online.tableau.com"  # Tableau Cloud URL or Tableau Server URL
-site_content_url = ""  # Leave blank for default site (""), or set a custom site (e.g., "yoursite")
+server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")  # Tableau URL
+site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")  # Site URL (empty for default site)
 
-# Authentication Method (Personal Access Token or Username/Password)
-auth_method = "PAT"  # Change to "Username" for Username/Password method
+auth_method = st.selectbox("Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
 
-# Personal Access Token (if using PAT method)
-token_name = "your_token_name"
-token_value = "your_token_value"
+# Input fields for Personal Access Token (PAT) or Username/Password
+if auth_method == "PAT (Personal Access Token)":
+    token_name = st.text_input("PAT Name")
+    token_value = st.text_input("PAT Secret", type="password")
 
-# Username and Password (if using Username/Password method)
-username = "your_username"
-password = "your_password"
+    if st.button("🔌 Connect with PAT"):
+        try:
+            tableau_auth = TSC.PersonalAccessTokenAuth(
+                token_name=token_name,
+                personal_access_token=token_value,
+                site_id=site_content_url
+            )
+            server = TSC.Server(server_url, use_server_version=True)
+            server.auth.sign_in(tableau_auth)
+            st.success("✅ Successfully signed in using PAT!")
+            server.auth.sign_out()
+            st.info("🔐 Signed out successfully.")
 
-# ------------------------
-# Authentication Process
-# ------------------------
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
 
-def login_tableau():
-    if auth_method == "PAT":
-        tableau_auth = TSC.PersonalAccessTokenAuth(
-            token_name=token_name,
-            personal_access_token=token_value,
-            site_id=site_content_url
-        )
-    else:  # Username/Password
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+else:  # Username & Password
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-    # Create a Tableau server object
-    server = TSC.Server(server_url, use_server_version=True)
+    if st.button("🔌 Connect with Username & Password"):
+        try:
+            tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+            server = TSC.Server(server_url, use_server_version=True)
+            server.auth.sign_in(tableau_auth)
+            st.success("✅ Successfully signed in with Username and Password!")
+            server.auth.sign_out()
+            st.info("🔐 Signed out successfully.")
 
-    try:
-        # Sign in to the server
-        print("Signing in...")
-        server.auth.sign_in(tableau_auth)
-        print("Successfully signed in!")
-        # You can perform further operations here, such as fetching data or listing sites.
-        
-        # Sign out after completing actions (optional)
-        server.auth.sign_out()
-        print("Signed out successfully.")
-    except Exception as e:
-        print(f"Error during sign-in: {str(e)}")
-
-if __name__ == "__main__":
-    login_tableau()
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
