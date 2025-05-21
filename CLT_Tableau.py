@@ -110,12 +110,25 @@ else:
         connect_and_export(tableau_auth)
 
 # ------------------------
-# Footer / Signature
+# Footer / Signature (Always Visible)
 # ------------------------
-st.markdown("---")
+
+# This will make the footer always stay at the bottom of the page
 st.markdown(
-    "<div style='text-align: center; color: gray;'>"
-    "Developed with ❤️ by <strong>Mohd Sajjad</strong>"
-    "</div>",
-    unsafe_allow_html=True
+    """
+    <style>
+    .footer {
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+        background-color: #f1f1f1;
+        color: #333;
+        text-align: center;
+        padding: 10px;
+    }
+    </style>
+    <div class="footer">
+        Developed with ❤️ by <strong>Mohd Sajjad</strong>
+    </div>
+    """, unsafe_allow_html=True
 )
