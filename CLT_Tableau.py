@@ -7,7 +7,7 @@ from io import StringIO
 # App Header
 # ------------------------
 st.set_page_config(page_title="Tableau Export Tool", layout="centered")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome To Migration World</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("#### 🔐 Connect to Tableau Server / Cloud and export your content as CSVs")
 st.markdown("---")
 
@@ -108,3 +108,14 @@ else:
     if st.button("🔌 Connect with Username & Password"):
         tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
         connect_and_export(tableau_auth)
+
+# ------------------------
+# Footer / Signature
+# ------------------------
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: gray;'>"
+    "Developed with ❤️ by <strong>Mohd Sajjad</strong>"
+    "</div>",
+    unsafe_allow_html=True
+)
