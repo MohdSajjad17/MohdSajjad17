@@ -1,48 +1,93 @@
 import streamlit as st
-import requests
+import tableauserverclient as TSC
 import pandas as pd
+from io import StringIO
 
-st.title("📊 Tableau Site Users Viewer")
+# ------------------------
+# Streamlit UI Setup
+# ------------------------
+st.title("🔐 Connect to Tableau Server / Cloud & Export Content")
 
-# User inputs
-server_url = st.text_input("Server URL", placeholder="https://your-server.com")
-site_id = st.text_input("Site ID")
-token = st.text_input("Auth Token", type="password")
+server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
+site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")
 
-if st.button("Fetch Users"):
-    if not server_url or not site_id or not token:
-        st.warning("Please fill in all fields.")
-    else:
-        headers = {
-            'X-Tableau-Auth': token
-        }
+auth_method = st.selectbox("Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
 
-        page_number = 1
-        page_size = 1000
-        all_users = []
+# ------------------------
+# Helper Function to Export CSVs
+# ------------------------
+def to_csv_download(data: list, headers: list, filename: str, label: str):
+    df = pd.DataFrame(data, columns=headers)
+    csv = df.to_csv(index=False)
+    st.download_button(label=label, data=csv, file_name=filename, mime="text/csv")
 
-        with st.spinner("Fetching users..."):
-            while True:
-                url = f'{server_url}/api/3.22/sites/{site_id}/users?pageSize={page_size}&pageNumber={page_number}'
-                response = requests.get(url, headers=headers)
+# ------------------------
+# Export Functions
+# ------------------------
+def export_users(server):
+    users, _ = server.users.get()
+    data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
+    headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
+    to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
 
-                if response.status_code != 200:
-                    st.error(f"Failed to fetch users: {response.status_code} - {response.text}")
-                    break
+def export_projects(server):
+    projects, _ = server.projects.get()
+    data = [[p.name, p.description, p.content_permissions] for p in projects]
+    headers = ["Name", "Description", "Content Permissions"]
+    to_csv_download(data, headers, "projects.csv", "⬇️ Download Projects")
 
-                data = response.json()
-                users = data['users']['user']
-                all_users.extend(users)
+def export_workbooks(server):
+    workbooks, _ = server.workbooks.get()
+    data = [[w.name, w.owner_id, w.project_name, w.created_at, w.updated_at] for w in workbooks]
+    headers = ["Workbook Name", "Owner ID", "Project", "Created At", "Updated At"]
+    to_csv_download(data, headers, "workbooks.csv", "⬇️ Download Workbooks")
 
-                total_available = int(data['pagination']['totalAvailable'])
-                if page_number * page_size >= total_available:
-                    break
-                page_number += 1
+def export_datasources(server):
+    datasources, _ = server.datasources.get()
+    data = [[d.name, d.owner_id, d.project_name, d.created_at, d.updated_at] for d in datasources]
+    headers = ["Datasource Name", "Owner ID", "Project", "Created At", "Updated At"]
+    to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
 
-        if all_users:
-            df = pd.DataFrame(all_users)
-            df = df[["name", "fullName", "email", "siteRole"]]
-            st.success(f"Fetched {len(df)} users.")
-            st.dataframe(df)
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download CSV", csv, "tableau_users.csv", "text/csv")
+# ------------------------
+# Main Login and Export Logic
+# ------------------------
+def connect_and_export(tableau_auth):
+    try:
+        server = TSC.Server(server_url, use_server_version=True)
+        server.auth.sign_in(tableau_auth)
+        st.success("✅ Connected successfully!")
+
+        # Export options
+        with st.expander("📋 Export Tableau Content"):
+            export_users(server)
+            export_projects(server)
+            export_workbooks(server)
+            export_datasources(server)
+
+        server.auth.sign_out()
+        st.info("🔐 Signed out successfully.")
+    except Exception as e:
+        st.error(f"❌ Connection failed: {str(e)}")
+
+# ------------------------
+# Auth Options UI
+# ------------------------
+if auth_method == "PAT (Personal Access Token)":
+    token_name = st.text_input("PAT Name")
+    token_value = st.text_input("PAT Secret", type="password")
+
+    if st.button("🔌 Connect with PAT"):
+        tableau_auth = TSC.PersonalAccessTokenAuth(
+            token_name=token_name,
+            personal_access_token=token_value,
+            site_id=site_content_url
+        )
+        connect_and_export(tableau_auth)
+
+else:
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("🔌 Connect with Username & Password"):
+        tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+        connect_and_export(tableau_auth)
