@@ -128,7 +128,7 @@ st.markdown(
     }
     </style>
     <div class="footer">
-        Developed with ❤️ by <strong>Mohd Sajjad</strong>
+        Developed with by <strong>Mohd Sajjad</strong>
     </div>
     """, unsafe_allow_html=True
 )
