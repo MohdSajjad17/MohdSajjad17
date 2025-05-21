@@ -4,14 +4,22 @@ import pandas as pd
 from io import StringIO
 
 # ------------------------
-# Streamlit UI Setup
+# App Header
 # ------------------------
-st.title("🔐 Connect to Tableau Server / Cloud & Export Content")
+st.set_page_config(page_title="Tableau Export Tool", layout="centered")
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
+st.markdown("#### 🔐 Connect to Tableau Server / Cloud and export your content as CSVs")
+st.markdown("---")
 
+# ------------------------
+# Input: Server & Auth
+# ------------------------
+st.subheader("🖥️ Tableau Connection Details")
 server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
 site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")
 
-auth_method = st.selectbox("Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
+auth_method = st.selectbox("🔑 Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
+st.markdown("---")
 
 # ------------------------
 # Helper: CSV Download Function
@@ -63,8 +71,8 @@ def connect_and_export(tableau_auth):
         server.auth.sign_in(tableau_auth)
         st.success("✅ Connected successfully!")
 
-        # Export content
-        with st.expander("📋 Export Tableau Content"):
+        with st.expander("📋 Export Tableau Content (click to expand)"):
+            st.write("Download data from the connected site:")
             export_users(server)
             export_groups(server)
             export_projects(server)
@@ -77,9 +85,10 @@ def connect_and_export(tableau_auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Auth Flow UI
+# Auth Form
 # ------------------------
 if auth_method == "PAT (Personal Access Token)":
+    st.subheader("🔐 Enter PAT Credentials")
     token_name = st.text_input("PAT Name")
     token_value = st.text_input("PAT Secret", type="password")
 
@@ -92,6 +101,7 @@ if auth_method == "PAT (Personal Access Token)":
         connect_and_export(tableau_auth)
 
 else:
+    st.subheader("👤 Enter Username and Password")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
