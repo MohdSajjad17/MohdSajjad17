@@ -28,9 +28,9 @@ if auth_method == "PAT (Personal Access Token)":
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Fetch the authenticated user by checking the users list
+            # Use the auth token to get the user details (alternate approach)
             users, pagination_item = server.users.get()
-            user = next((u for u in users if u.id == server.auth.user_id), None)
+            user = next((u for u in users if u.id == server.auth.token), None)  # Match based on token
             server_info = server.server_info.get()
 
             if user:
@@ -58,9 +58,9 @@ else:
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Fetch the authenticated user by checking the users list
+            # Use the auth token to get the user details (alternate approach)
             users, pagination_item = server.users.get()
-            user = next((u for u in users if u.id == server.auth.user_id), None)
+            user = next((u for u in users if u.id == server.auth.token), None)  # Match based on token
             server_info = server.server_info.get()
 
             if user:
