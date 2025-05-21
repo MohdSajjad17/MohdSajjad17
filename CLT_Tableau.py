@@ -7,7 +7,7 @@ from io import StringIO
 # App Header
 # ------------------------
 st.set_page_config(page_title="Tableau Export Tool", layout="centered")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to The Migration World</h1>", unsafe_allow_html=True)
 st.markdown("#### 🔐 Connect to Tableau Server / Cloud and export your content as CSVs")
 st.markdown("---")
 
