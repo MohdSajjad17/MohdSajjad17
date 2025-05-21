@@ -28,14 +28,18 @@ if auth_method == "PAT (Personal Access Token)":
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Fetch the authenticated user
-            user = server.users.get_by_id(server.auth.user_id)
+            # Fetch the authenticated user by checking the users list
+            users, pagination_item = server.users.get()
+            user = next((u for u in users if u.id == server.auth.user_id), None)
             server_info = server.server_info.get()
 
-            st.success("✅ Successfully connected!")
-            st.write(f"📡 Server version: {server_info.product_version}")
-            st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
-            st.write(f"🔐 Site ID: {server.site_id}")
+            if user:
+                st.success("✅ Successfully connected!")
+                st.write(f"📡 Server version: {server_info.product_version}")
+                st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
+                st.write(f"🔐 Site ID: {server.site_id}")
+            else:
+                st.error("❌ User not found.")
 
             server.auth.sign_out()
 
@@ -54,14 +58,18 @@ else:
             server = TSC.Server(server_url, use_server_version=True)
             server.auth.sign_in(tableau_auth)
 
-            # Fetch the authenticated user
-            user = server.users.get_by_id(server.auth.user_id)
+            # Fetch the authenticated user by checking the users list
+            users, pagination_item = server.users.get()
+            user = next((u for u in users if u.id == server.auth.user_id), None)
             server_info = server.server_info.get()
 
-            st.success("✅ Successfully connected!")
-            st.write(f"📡 Server version: {server_info.product_version}")
-            st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
-            st.write(f"🔐 Site ID: {server.site_id}")
+            if user:
+                st.success("✅ Successfully connected!")
+                st.write(f"📡 Server version: {server_info.product_version}")
+                st.write(f"👤 Signed in as: {user.name} ({user.site_role})")
+                st.write(f"🔐 Site ID: {server.site_id}")
+            else:
+                st.error("❌ User not found.")
 
             server.auth.sign_out()
 
