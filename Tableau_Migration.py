@@ -5,10 +5,7 @@ import re
 
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 
-# Title and header
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
-
-# Signature (always visible)
 st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
@@ -32,25 +29,37 @@ def get_server(url):
     return TSC.Server(url, use_server_version=True)
 
 
-def migrate_workbook(server_src, server_dest, wb, dest_proj_id, temp_folder):
-    safe_name = sanitize_filename(wb.name)
-    download_path = os.path.join(temp_folder, f"{safe_name}.twbx")
+def download_workbooks(server_src, project_id, download_folder):
+    os.makedirs(download_folder, exist_ok=True)
+    workbooks, _ = server_src.workbooks.get()
+    selected_wbs = [wb for wb in workbooks if wb.project_id == project_id]
+    if not selected_wbs:
+        st.warning("No workbooks found in the selected source project.")
+        return []
 
-    st.info(f"Downloading workbook '{wb.name}'")
-    server_src.workbooks.download(wb.id, filepath=download_path)
+    downloaded_files = []
+    for wb in selected_wbs:
+        safe_name = sanitize_filename(wb.name)
+        filepath = os.path.join(download_folder, f"{safe_name}.twbx")
+        st.info(f"Downloading '{wb.name}' to '{filepath}'")
+        server_src.workbooks.download(wb.id, filepath=filepath)
+        if os.path.exists(filepath):
+            downloaded_files.append((wb, filepath))
+        else:
+            st.error(f"Failed to download workbook: {wb.name}")
+    return downloaded_files
 
-    if not os.path.exists(download_path):
-        raise FileNotFoundError(f"Download failed! File not found at {download_path}")
 
-    st.info(f"Publishing workbook '{wb.name}'")
-    new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_proj_id)
-    server_dest.workbooks.publish(new_wb, download_path, mode=TSC.Server.PublishMode.CreateNew)
+def publish_workbooks(server_dest, files_and_workbooks, dest_project_id):
+    for wb, filepath in files_and_workbooks:
+        try:
+            st.info(f"Publishing workbook '{wb.name}' from '{filepath}'")
+            new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
+            server_dest.workbooks.publish(new_wb, filepath, mode=TSC.Server.PublishMode.CreateNew)
+            st.success(f"Published '{wb.name}' successfully.")
+        except Exception as e:
+            st.error(f"Failed to publish '{wb.name}': {e}")
 
-    os.remove(download_path)
-    st.success(f"Workbook '{wb.name}' migrated successfully and temp file removed.")
-
-
-# -------------- Form -------------------
 
 with st.form("migration_form"):
     st.subheader("🔐 Source Tableau Credentials")
@@ -91,58 +100,49 @@ with st.form("migration_form"):
 
     submitted = st.form_submit_button("🚀 Start Migration")
 
-# -------------- Migration Logic -------------------
-
 if submitted:
     try:
-        # Create local temp folder
-        temp_folder = os.path.join(os.getcwd(), "temp_workbooks")
-        os.makedirs(temp_folder, exist_ok=True)
-
-        # Connect to source server
+        # Connect source server
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
 
-        # Get source project by name
+        # Get source project object
         src_projects, _ = src_server.projects.get()
         src_proj_obj = next((p for p in src_projects if p.name == source_proj), None)
         if not src_proj_obj:
             st.error(f"Source project '{source_proj}' not found.")
             st.stop()
 
-        # Get all workbooks in the source project
-        src_workbooks, _ = src_server.workbooks.get()
-        workbooks_to_migrate = [w for w in src_workbooks if w.project_id == src_proj_obj.id]
-
-        if not workbooks_to_migrate:
-            st.warning(f"No workbooks found in source project '{source_proj}'.")
+        # Download workbooks to local folder 'source_files'
+        download_folder = os.path.join(os.getcwd(), "source_files", sanitize_filename(source_proj))
+        st.info(f"Downloading workbooks to local folder: {download_folder}")
+        downloaded_wbs = download_workbooks(src_server, src_proj_obj.id, download_folder)
+        if not downloaded_wbs:
+            st.warning("No workbooks downloaded. Exiting.")
             st.stop()
 
-        # Connect to destination server
+        src_server.auth.sign_out()
+
+        # Connect destination server
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
 
-        # Get destination project by name
+        # Get destination project object
         dest_projects, _ = dest_server.projects.get()
         dest_proj_obj = next((p for p in dest_projects if p.name == dest_proj), None)
         if not dest_proj_obj:
             st.error(f"Destination project '{dest_proj}' not found.")
             st.stop()
 
-        # Migrate each workbook
-        for wb in workbooks_to_migrate:
-            try:
-                migrate_workbook(src_server, dest_server, wb, dest_proj_obj.id, temp_folder)
-            except Exception as e:
-                st.error(f"Failed to migrate workbook '{wb.name}': {e}")
+        # Publish workbooks from local folder
+        publish_workbooks(dest_server, downloaded_wbs, dest_proj_obj.id)
 
-        # Sign out from servers
-        src_server.auth.sign_out()
         dest_server.auth.sign_out()
 
         st.success("🎉 Migration completed successfully!")
+        st.info(f"Downloaded workbooks are saved in:\n{download_folder}")
 
     except Exception as e:
         st.error(f"❌ Migration failed: {e}")
