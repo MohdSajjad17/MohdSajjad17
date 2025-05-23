@@ -9,7 +9,7 @@ st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
     </style>
-    <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
+    <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
 def sanitize(name):
@@ -62,6 +62,7 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
         src_perms = src_wb.permissions
         dest_perms = dest_wb.permissions
 
+        # Clear existing destination permissions
         for perm in dest_perms:
             dest_server.workbooks._permissions.delete(dest_wb, perm)
 
@@ -120,6 +121,17 @@ def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, p
             migrate_permissions(src_server, wb, dest_server, published_wb)
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
+
+def get_or_create_project(server, project_name):
+    projects, _ = server.projects.get()
+    project = next((p for p in projects if p.name == project_name), None)
+    if project:
+        return project
+    else:
+        new_project = TSC.ProjectItem(name=project_name)
+        created_project = server.projects.create(new_project)
+        st.info(f"📁 Created destination project: {project_name}")
+        return created_project
 
 # ----------------------------
 # Streamlit UI Form
@@ -185,12 +197,8 @@ if submitted:
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
 
-        dest_proj_obj = next((p for p in dest_server.projects.get()[0] if p.name == dest_proj), None)
-        if not dest_proj_obj:
-            st.error(f"❌ Destination project '{dest_proj}' not found.")
-            src_server.auth.sign_out()
-            dest_server.auth.sign_out()
-            st.stop()
+        # Create destination project if not present
+        dest_proj_obj = get_or_create_project(dest_server, dest_proj)
 
         publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
 
