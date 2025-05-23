@@ -2,7 +2,7 @@ import streamlit as st
 import tableauserverclient as TSC
 import pandas as pd
 
-# Your existing page setup and UI header here
+# Page setup
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -33,28 +33,27 @@ def export_users(server):
     } for user in users]
     return pd.DataFrame(user_data)
 
-# Export groups and members (FIXED: use server.groups.populate correctly)
-def export_groups_and_members(server):
+# Export groups and members (fixed method)
+def export_groups(server):
     groups, _ = server.groups.get()
-    group_data = []
+    rows = []
 
     for group in groups:
         try:
-            server.groups.populate(group)  # Correct call!
+            server.groups.populate(group)  # Fetch users in the group
             if hasattr(group, 'users') and group.users:
                 for user in group.users:
-                    group_data.append({
-                        "GroupName": group.name,
-                        "Username": user.name
-                    })
+                    rows.append([group.name, user.name])
             else:
-                st.warning(f"No users found in group: {group.name}")
+                # Group with no users
+                rows.append([group.name, ""])
         except Exception as e:
             st.error(f"Failed to get users for group {group.name}: {e}")
 
-    return pd.DataFrame(group_data)
+    df = pd.DataFrame(rows, columns=["Group Name", "Username"])
+    return df
 
-# Import users
+# Import users to destination server
 def import_users(server, user_file):
     df = pd.read_csv(user_file)
     for _, row in df.iterrows():
@@ -69,13 +68,13 @@ def import_users(server, user_file):
         except Exception as e:
             st.error(f"Failed to add user {row['Username']}: {e}")
 
-# Import groups and members
+# Import groups and members to destination server
 def import_groups_and_members(server, group_file):
     df = pd.read_csv(group_file)
     groups_map = {}
 
     # Create groups first
-    for group_name in df["GroupName"].unique():
+    for group_name in df["Group Name"].unique():
         try:
             group_item = TSC.GroupItem(name=group_name)
             created_group = server.groups.create(group_item)
@@ -84,23 +83,24 @@ def import_groups_and_members(server, group_file):
         except Exception as e:
             st.error(f"Failed to create group {group_name}: {e}")
 
-    # Add users to groups
+    # Map existing users on destination by username
     users, _ = server.users.get()
     users_dict = {u.name: u.id for u in users}
 
+    # Add users to groups
     for _, row in df.iterrows():
         try:
             user_id = users_dict.get(row["Username"])
-            group_id = groups_map.get(row["GroupName"])
+            group_id = groups_map.get(row["Group Name"])
             if group_id and user_id:
                 server.groups.add_user(group_id, user_id)
-                st.info(f"Added {row['Username']} to {row['GroupName']}")
+                st.info(f"Added {row['Username']} to {row['Group Name']}")
             else:
-                st.warning(f"Could not find user or group for {row['Username']} / {row['GroupName']}")
+                st.warning(f"User or group not found for {row['Username']} / {row['Group Name']}")
         except Exception as e:
             st.error(f"Failed to add {row['Username']} to group: {e}")
 
-# ------------- Streamlit UI ----------------
+# ----------------- Streamlit UI --------------------
 
 with st.form("migration_form"):
 
@@ -140,12 +140,12 @@ with st.form("migration_form"):
             src_server = get_server(src_url)
             with src_server.auth.sign_in(src_auth):
                 users_df = export_users(src_server)
-                groups_df = export_groups_and_members(src_server)
+                groups_df = export_groups(src_server)
 
                 st.success("Export successful!")
 
-                st.download_button("Download Users CSV", users_df.to_csv(index=False).encode('utf-8'), "users_export.csv", "text/csv")
-                st.download_button("Download Groups CSV", groups_df.to_csv(index=False).encode('utf-8'), "groups_export.csv", "text/csv")
+                st.download_button("⬇️ Download Users CSV", users_df.to_csv(index=False).encode('utf-8'), "users_export.csv", "text/csv")
+                st.download_button("⬇️ Download Groups with Users CSV", groups_df.to_csv(index=False).encode('utf-8'), "groups_export.csv", "text/csv")
         except Exception as e:
             st.error(f"Export failed: {e}")
 
