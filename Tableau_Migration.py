@@ -54,24 +54,6 @@ def download_workbooks(server, project_id, project_name):
             st.error(f"❌ Download failed for {wb.name}: {e}")
     return files
 
-def download_data_sources(server, project_id, project_name):
-    data_sources, _ = server.datasources.get()
-    selected = [ds for ds in data_sources if ds.project_id == project_id]
-    files = []
-    for ds in selected:
-        path = get_local_path("source", project_name, ds.name)
-        st.info(f"⬇️ Downloading: {ds.name}")
-        try:
-            file_path = server.datasources.download(ds.id, filepath=path)
-            if os.path.exists(file_path):
-                files.append((ds, file_path))
-                st.success(f"✅ Downloaded: {ds.name}")
-            else:
-                st.error(f"❌ File not saved correctly: {ds.name}")
-        except Exception as e:
-            st.error(f"❌ Download failed for {ds.name}: {e}")
-    return files
-
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
     try:
         src_server.workbooks.populate_permissions(src_wb)
@@ -129,35 +111,43 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
     except Exception as e:
         st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
 
-def migrate_data_source_permissions(src_server, src_ds, dest_server, dest_ds):
-    try:
-        src_server.datasources.populate_permissions(src_ds)
-        dest_server.datasources.populate_permissions(dest_ds)
+def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
+    for wb, path in files_and_wbs:
+        st.info(f"⬆️ Publishing: {wb.name}")
+        try:
+            new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
+            published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.Overwrite)
+            st.success(f"✅ Published: {wb.name}")
+            migrate_permissions(src_server, wb, dest_server, published_wb)
+        except Exception as e:
+            st.error(f"❌ Failed to publish {wb.name}: {e}")
 
-        src_perms = src_ds.permissions
-        dest_perms = dest_ds.permissions
+def get_or_create_project(server, project_name):
+    projects, _ = server.projects.get()
+    project = next((p for p in projects if p.name == project_name), None)
+    if project:
+        return project
+    else:
+        new_project = TSC.ProjectItem(name=project_name)
+        created_project = server.projects.create(new_project)
+        st.info(f"📁 Created destination project: {project_name}")
+        return created_project
 
-        # Clear existing destination permissions
-        for perm in dest_perms:
-            dest_server.datasources._permissions.delete(dest_ds, perm)
-
-        src_users, _ = src_server.users.get()
-        src_groups, _ = src_server.groups.get()
-        dest_users, _ = dest_server.users.get()
-        dest_groups, _ = dest_server.groups.get()
-
-        src_user_map = {u.id: u for u in src_users}
-        src_group_map = {g.id: g for g in src_groups}
-        dest_user_map = {u.name: u for u in dest_users}
-        dest_group_map = {g.name: g for g in dest_groups}
-
-        missing_grantees = []
-
-        for perm in src_perms:
-            grantee_ref = perm.grantee
-            dest_grantee = None
-
-            if grantee_ref.tag_name == 'user':
-                src_user = src_user_map.get(gr
+def download_data_sources(server, project_id, project_name):
+    datasources, _ = server.datasources.get()
+    selected = [ds for ds in datasources if ds.project_id == project_id]
+    files = []
+    for ds in selected:
+        path = get_local_path("source", project_name, ds.name)
+        st.info(f"⬇️ Downloading: {ds.name}")
+        try:
+            file_path = server.datasources.download(ds.id, filepath=path)
+            if os.path.exists(file_path):
+                files.append((ds, file_path))
+                st.success(f"✅ Downloaded: {ds.name}")
+            else:
+                st.error(f"❌ File not saved correctly: {ds.name}")
+        except Exception as e:
+            st.error(f"❌ Download failed for {ds.name}: {e
 ::contentReference[oaicite:0]{index=0}
  
