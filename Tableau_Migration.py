@@ -59,10 +59,12 @@ def download_workbooks(server, project_id, project_name):
     return files
 
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
+    # Permissions can only be accessed after sign-in, so this function
+    # MUST be called after both servers are signed in
     try:
         # Get permissions from source workbook
         src_permissions, _ = src_server.permissions.get(src_wb)
-        
+
         # Clear existing permissions on destination workbook before applying new ones
         dest_permissions, _ = dest_server.permissions.get(dest_wb)
         for perm in dest_permissions:
@@ -87,7 +89,7 @@ def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, p
             published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
             st.success(f"✅ Published: {wb.name}")
 
-            # Migrate permissions after publishing
+            # Migrate permissions AFTER publishing and AFTER both servers are signed in
             migrate_permissions(src_server, wb, dest_server, published_wb)
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
@@ -137,7 +139,7 @@ if submitted:
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Step 2: Connect to Source and sign in
+        # Step 2: Connect to Source and sign in BEFORE using permissions
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
@@ -154,7 +156,7 @@ if submitted:
             src_server.auth.sign_out()
             st.stop()
 
-        # Step 3: Connect to Destination and sign in
+        # Step 3: Connect to Destination and sign in BEFORE using permissions
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
@@ -169,7 +171,7 @@ if submitted:
         # Step 4: Publish workbooks & migrate permissions
         publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
 
-        # Step 5: Sign out
+        # Step 5: Sign out after everything is done
         src_server.auth.sign_out()
         dest_server.auth.sign_out()
 
