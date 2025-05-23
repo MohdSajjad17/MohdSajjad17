@@ -3,9 +3,6 @@ import tableauserverclient as TSC
 import os
 import re
 
-# ----------------------------
-# Page setup
-# ----------------------------
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -15,9 +12,6 @@ st.markdown("""
     <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
-# ----------------------------
-# Helper functions
-# ----------------------------
 def sanitize(name):
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
@@ -41,14 +35,6 @@ def get_auth(method, token_name, token_value, username, password, site):
 
 def get_server(url):
     return TSC.Server(url, use_server_version=True)
-
-def get_dest_user_by_name(server, name):
-    users, _ = server.users.get()
-    return next((u for u in users if u.name == name), None)
-
-def get_dest_group_by_name(server, name):
-    groups, _ = server.groups.get()
-    return next((g for g in groups if g.name == name), None)
 
 def download_workbooks(server, project_id, project_name):
     workbooks, _ = server.workbooks.get()
@@ -76,34 +62,51 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
         src_perms = src_wb.permissions
         dest_perms = dest_wb.permissions
 
-        # Clear existing destination permissions
         for perm in dest_perms:
             dest_server.workbooks._permissions.delete(dest_wb, perm)
 
+        src_users, _ = src_server.users.get()
+        src_groups, _ = src_server.groups.get()
+        dest_users, _ = dest_server.users.get()
+        dest_groups, _ = dest_server.groups.get()
+
+        src_user_map = {u.id: u for u in src_users}
+        src_group_map = {g.id: g for g in src_groups}
+        dest_user_map = {u.name: u for u in dest_users}
+        dest_group_map = {g.name: g for g in dest_groups}
+
         missing_grantees = []
 
-        # Add source permissions to destination workbook
         for perm in src_perms:
-            grantee = perm.grantee
+            grantee_ref = perm.grantee
             dest_grantee = None
 
-            if isinstance(grantee, TSC.UserItem):
-                dest_grantee = get_dest_user_by_name(dest_server, grantee.name)
-            elif isinstance(grantee, TSC.GroupItem):
-                dest_grantee = get_dest_group_by_name(dest_server, grantee.name)
+            if grantee_ref.tag_name == 'user':
+                src_user = src_user_map.get(grantee_ref.id)
+                if src_user and src_user.name in dest_user_map:
+                    dest_grantee = dest_user_map[src_user.name]
+                else:
+                    missing_grantees.append(src_user.name if src_user else grantee_ref.id)
+
+            elif grantee_ref.tag_name == 'group':
+                src_group = src_group_map.get(grantee_ref.id)
+                if src_group and src_group.name in dest_group_map:
+                    dest_grantee = dest_group_map[src_group.name]
+                else:
+                    missing_grantees.append(src_group.name if src_group else grantee_ref.id)
 
             if dest_grantee:
                 new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
                 dest_server.workbooks.update_permissions(dest_wb, [new_perm])
             else:
-                st.warning(f"⚠️ Skipped permission for missing grantee: {grantee.name}")
-                missing_grantees.append(grantee.name)
+                st.warning(f"⚠️ Skipped permission for unknown grantee with ID: {grantee_ref.id}")
 
         if missing_grantees:
             st.info("ℹ️ Skipped the following missing users/groups:")
             st.write(list(set(missing_grantees)))
 
         st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
+
     except Exception as e:
         st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
 
