@@ -1,106 +1,98 @@
 import streamlit as st
 import tableauserverclient as TSC
 import pandas as pd
+import os
 
-# ------------------------
-# App Header
-# ------------------------
 st.set_page_config(page_title="Tableau Export Tool", layout="centered")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
-st.markdown("#### 🔐 Connect to Tableau Server / Cloud and selectively export content")
-st.markdown("---")
 
-# ------------------------
-# Input: Server & Auth
-# ------------------------
-st.subheader("🖥️ Tableau Connection Details")
 server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
-site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")
-
+site_content_url = st.text_input("Site Content URL (Leave empty for Default)", "")
 auth_method = st.selectbox("🔑 Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
-st.markdown("---")
 
-# ------------------------
-# CSV Export Utility
-# ------------------------
-def to_csv_download(data: list, headers: list, filename: str, label: str):
+# Export selection
+export_type = st.radio("Select what you want to export:", ["Users", "Groups", "Projects", "Datasources", "Workbooks (.twbx)"])
+
+# Auth input
+if auth_method == "PAT (Personal Access Token)":
+    token_name = st.text_input("PAT Name")
+    token_value = st.text_input("PAT Secret", type="password")
+else:
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+def authenticate():
+    if auth_method == "PAT (Personal Access Token)":
+        return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
+    return TSC.TableauAuth(username, password, site_id=site_content_url)
+
+def init_server():
+    return TSC.Server(server_url, use_server_version=True)
+
+def download_button_csv(data, headers, filename, label):
     df = pd.DataFrame(data, columns=headers)
     csv = df.to_csv(index=False)
     st.download_button(label=label, data=csv, file_name=filename, mime="text/csv")
 
-# ------------------------
-# Export Functions
-# ------------------------
-def export_users(server):
-    users, _ = server.users.get()
-    data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
-    headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
-    to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
-
-def export_groups(server):
-    groups, _ = server.groups.get()
-    data = [[g.name, g.id] for g in groups]
-    headers = ["Group Name", "Group ID"]
-    to_csv_download(data, headers, "groups.csv", "⬇️ Download Groups")
-
-def export_workbooks(server):
-    workbooks, _ = server.workbooks.get()
-    data = [[w.name, w.project_name, w.owner_id, w.webpage_url] for w in workbooks]
-    headers = ["Workbook Name", "Project", "Owner ID", "Workbook URL"]
-    to_csv_download(data, headers, "workbooks.csv", "⬇️ Download Workbooks")
-
-# ------------------------
-# Main Logic: Connection and Content Export
-# ------------------------
-def connect_and_export_content(tableau_auth, selected_option):
+if st.button("🔌 Connect and Export"):
     try:
-        server = TSC.Server(server_url, use_server_version=True)
-        server.auth.sign_in(tableau_auth)
-        st.success("✅ Connected to Tableau Server")
+        auth = authenticate()
+        server = init_server()
+        server.auth.sign_in(auth)
+        st.success("✅ Signed in")
 
-        if selected_option == "Users":
-            export_users(server)
-        elif selected_option == "Groups":
-            export_groups(server)
-        elif selected_option == "Workbooks":
-            export_workbooks(server)
+        if export_type == "Users":
+            users, _ = server.users.get()
+            data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
+            headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
+            download_button_csv(data, headers, "users.csv", "⬇️ Download Users")
+
+        elif export_type == "Groups":
+            groups, _ = server.groups.get()
+            data = [[g.name, g.id] for g in groups]
+            headers = ["Group Name", "Group ID"]
+            download_button_csv(data, headers, "groups.csv", "⬇️ Download Groups")
+
+        elif export_type == "Projects":
+            projects, _ = server.projects.get()
+            data = [[p.name, p.description] for p in projects]
+            headers = ["Project Name", "Description"]
+            download_button_csv(data, headers, "projects.csv", "⬇️ Download Projects")
+
+        elif export_type == "Datasources":
+            datasources, _ = server.datasources.get()
+            data = [[d.name, d.project_name, d.owner_id] for d in datasources]
+            headers = ["Datasource Name", "Project", "Owner ID"]
+            download_button_csv(data, headers, "datasources.csv", "⬇️ Download Datasources")
+
+        elif export_type == "Workbooks (.twbx)":
+            st.markdown("🔎 Optional filters for project and owner")
+            project_filter = st.text_input("Filter by Project Name (optional)")
+            owner_filter = st.text_input("Filter by Owner ID (optional)")
+
+            workbooks, _ = server.workbooks.get()
+            filtered = [
+                w for w in workbooks
+                if (not project_filter or w.project_name == project_filter) and
+                   (not owner_filter or w.owner_id == owner_filter)
+            ]
+
+            for workbook in filtered:
+                try:
+                    file_path = f"{workbook.name}.twbx"
+                    server.workbooks.download(workbook.id, filepath=file_path, include_extract=False)
+                    with open(file_path, "rb") as f:
+                        st.download_button(f"⬇️ Download {workbook.name}.twbx", data=f, file_name=file_path)
+                    os.remove(file_path)
+                except Exception as e:
+                    st.warning(f"❌ Could not download {workbook.name}: {e}")
 
         server.auth.sign_out()
-        st.info("🔐 Signed out successfully.")
+        st.info("🔐 Signed out.")
     except Exception as e:
-        st.error(f"❌ Connection failed: {str(e)}")
+        st.error(f"❌ Error: {e}")
 
-# ------------------------
-# Authentication and Content Option
-# ------------------------
-st.subheader("📂 Choose Content Type to Export")
-export_option = st.radio("What would you like to export?", ("Users", "Groups", "Workbooks"))
-
-if auth_method == "PAT (Personal Access Token)":
-    st.subheader("🔐 Enter PAT Credentials")
-    token_name = st.text_input("PAT Name")
-    token_value = st.text_input("PAT Secret", type="password")
-
-    if st.button("🔌 Connect and Export"):
-        tableau_auth = TSC.PersonalAccessTokenAuth(
-            token_name=token_name,
-            personal_access_token=token_value,
-            site_id=site_content_url
-        )
-        connect_and_export_content(tableau_auth, export_option)
-
-else:
-    st.subheader("👤 Enter Username and Password")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("🔌 Connect and Export"):
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
-        connect_and_export_content(tableau_auth, export_option)
-
-# ------------------------
 # Footer
-# ------------------------
 st.markdown(
     """
     <style>
