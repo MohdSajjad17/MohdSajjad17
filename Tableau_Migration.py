@@ -56,25 +56,29 @@ def get_auth(method, token_name, token_value, username, password, site):
 def get_server(url):
     return TSC.Server(url, use_server_version=True)
 
+def sanitize_filename(name):
+    # Replace invalid filename characters with underscore
+    return re.sub(r'[^\w\-_\. ]', '_', name)
+
 # Run Migration on Submit
 if submitted:
     try:
+        # Create a dedicated temp folder inside current working directory
         temp_folder = os.path.join(os.getcwd(), "temp_workbooks")
         os.makedirs(temp_folder, exist_ok=True)
 
-        # Authenticate
+        # Authenticate source
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
-        dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
-
-        # Source login
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
 
+        # Get source project
         src_projects, _ = src_server.projects.get()
         src_proj_obj = next((p for p in src_projects if p.name == source_proj), None)
         if not src_proj_obj:
             raise Exception(f"Source project '{source_proj}' not found.")
 
+        # Get workbooks in source project
         src_workbooks, _ = src_server.workbooks.get()
         workbooks_to_migrate = [w for w in src_workbooks if w.project_id == src_proj_obj.id]
 
@@ -84,7 +88,7 @@ if submitted:
         downloaded = []
         for wb in workbooks_to_migrate:
             try:
-                safe_name = re.sub(r'[^\w\-_\. ]', '_', wb.name)
+                safe_name = sanitize_filename(wb.name)
                 path = os.path.join(temp_folder, f"{safe_name}.twbx")
                 src_server.workbooks.download(wb.id, filepath=path)
                 downloaded.append((wb.name, path))
@@ -93,22 +97,26 @@ if submitted:
                 st.warning(f"❌ Failed to download {wb.name}: {e}")
         src_server.auth.sign_out()
 
-        # Destination login
+        # Authenticate destination
+        dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
 
+        # Get destination project
         dest_projects, _ = dest_server.projects.get()
         dest_proj_obj = next((p for p in dest_projects if p.name == dest_proj), None)
         if not dest_proj_obj:
             raise Exception(f"Destination project '{dest_proj}' not found.")
 
+        # Publish downloaded workbooks to destination
         for wb_name, path in downloaded:
             try:
                 new_wb = TSC.WorkbookItem(name=wb_name, project_id=dest_proj_obj.id)
+                # Open file in binary mode, pass handle and actual path
                 with open(path, 'rb') as f:
-                    dest_server.workbooks.publish(new_wb, f.name, mode=TSC.Server.PublishMode.CreateNew)
+                    dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
                 st.success(f"📤 Published: {wb_name}")
-                os.remove(path)
+                os.remove(path)  # Clean up downloaded file after publishing
             except Exception as e:
                 st.warning(f"❌ Failed to publish {wb_name}: {e}")
 
@@ -118,7 +126,7 @@ if submitted:
     except Exception as final_error:
         st.error(f"❌ Migration failed: {final_error}")
 
-# Footer
+# Footer (signature)
 st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 50px; color: #888; font-size: 16px; }
