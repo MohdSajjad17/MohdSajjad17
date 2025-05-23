@@ -1,36 +1,15 @@
 import streamlit as st
 import tableauserverclient as TSC
-import os
-import re
 import pandas as pd
+import os
 
-# Page setup
-st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
-st.markdown("""
-    <style>
-    .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
-    </style>
-    <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
-""", unsafe_allow_html=True)
+# Set Streamlit page config
+st.set_page_config(page_title="Tableau User & Group Migration", layout="wide")
+st.title("🔁 Tableau User & Group Migration Tool")
 
-# ----------------------------
-# Helper functions
-# ----------------------------
-def sanitize(name):
-    return re.sub(r'[^\w\-_\. ]', '_', name)
-
-def create_local_dirs(project_name):
-    base = os.path.join(os.getcwd(), "tableau_migration")
-    src = os.path.join(base, "source", sanitize(project_name))
-    dest = os.path.join(base, "destination", sanitize(project_name))
-    os.makedirs(src, exist_ok=True)
-    os.makedirs(dest, exist_ok=True)
-    return src, dest
-
-def get_local_path(type_: str, project_name: str, name: str, extension: str) -> str:
-    path = os.path.join(os.getcwd(), "tableau_migration", type_, sanitize(project_name))
-    return os.path.join(path, f"{sanitize(name)}{extension}")
+# ---------------------------
+# Helper Functions
+# ---------------------------
 
 def get_auth(method, token_name, token_value, username, password, site):
     if method == "PAT":
@@ -41,113 +20,130 @@ def get_auth(method, token_name, token_value, username, password, site):
 def get_server(url):
     return TSC.Server(url, use_server_version=True)
 
-def download_workbooks(server, project_id, project_name):
-    workbooks, _ = server.workbooks.get()
-    selected = [wb for wb in workbooks if wb.project_id == project_id]
-    files = []
-    for wb in selected:
-        path = get_local_path("source", project_name, wb.name, ".twbx")
-        st.info(f"⬇️ Downloading: {wb.name}")
+def export_users(server):
+    users, _ = server.users.get()
+    user_data = [{
+        "Username": user.name,
+        "FullName": user.fullname,
+        "Email": user.email or "",
+        "SiteRole": user.site_role
+    } for user in users]
+    df = pd.DataFrame(user_data)
+    df.to_csv("users_export.csv", index=False)
+    st.success("✅ Exported users to users_export.csv")
+    return df
+
+def export_groups_and_members(server):
+    groups, _ = server.groups.get()
+    group_data = []
+    for group in groups:
+        users_in_group, _ = server.groups.get_users(group.id)
+        for user in users_in_group:
+            group_data.append({
+                "GroupName": group.name,
+                "Username": user.name
+            })
+    df = pd.DataFrame(group_data)
+    df.to_csv("groups_export.csv", index=False)
+    st.success("✅ Exported groups and memberships to groups_export.csv")
+    return df
+
+def import_users(server, user_file):
+    df = pd.read_csv(user_file)
+    for _, row in df.iterrows():
         try:
-            file_path = server.workbooks.download(wb.id, filepath=path)
-            if os.path.exists(file_path):
-                files.append((wb, file_path))
-                st.success(f"✅ Downloaded: {wb.name}")
-            else:
-                st.error(f"❌ File not saved correctly: {wb.name}")
+            user_item = TSC.UserItem(
+                name=row['Username'],
+                site_role=row['SiteRole'],
+                full_name=row.get('FullName', '')
+            )
+            server.users.add(user_item)
+            st.success(f"✅ User created: {row['Username']}")
         except Exception as e:
-            st.error(f"❌ Download failed for {wb.name}: {e}")
-    return files
+            st.error(f"❌ Failed to add user {row['Username']}: {e}")
 
-def publish_workbooks(server, files_and_wbs, dest_project_id, project_name):
-    for wb, path in files_and_wbs:
-        st.info(f"⬆️ Publishing: {wb.name}")
+def import_groups_and_members(server, group_file):
+    df = pd.read_csv(group_file)
+    groups_map = {}
+
+    for group_name in df["GroupName"].unique():
         try:
-            new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
-            server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
-            st.success(f"✅ Published: {wb.name}")
+            group_item = TSC.GroupItem(name=group_name)
+            created_group = server.groups.create(group_item)
+            groups_map[group_name] = created_group.id
+            st.success(f"✅ Group created: {group_name}")
         except Exception as e:
-            st.error(f"❌ Failed to publish {wb.name}: {e}")
+            st.error(f"❌ Failed to create group {group_name}: {e}")
 
-def download_datasources(server, project_id, project_name):
-    datasources, _ = server.datasources.get()
-    selected = [ds for ds in datasources if ds.project_id == project_id]
-    files = []
-    for ds in selected:
-        path = get_local_path("source", project_name, ds.name, ".tdsx")
-        st.info(f"⬇️ Downloading: {ds.name}")
+    for _, row in df.iterrows():
         try:
-            file_path = server.datasources.download(ds.id, filepath=path)
-            if os.path.exists(file_path):
-                files.append((ds, file_path))
-                st.success(f"✅ Downloaded: {ds.name}")
-            else:
-                st.error(f"❌ File not saved correctly: {ds.name}")
+            user = server.users.get_by_name(row["Username"])
+            group_id = groups_map.get(row["GroupName"])
+            if group_id:
+                server.groups.add_user(group_id, user.id)
+                st.info(f"👥 Added {row['Username']} to {row['GroupName']}")
         except Exception as e:
-            st.error(f"❌ Download failed for {ds.name}: {e}")
-    return files
+            st.error(f"❌ Failed to add {row['Username']} to group: {e}")
 
-def publish_datasources(server, files_and_dss, dest_project_id, project_name):
-    for ds, path in files_and_dss:
-        st.info(f"⬆️ Publishing: {ds.name}")
-        try:
-            new_ds = TSC.DatasourceItem(name=ds.name, project_id=dest_project_id)
-            server.datasources.publish(new_ds, path, mode=TSC.Server.PublishMode.CreateNew)
-            st.success(f"✅ Published: {ds.name}")
-        except Exception as e:
-            st.error(f"❌ Failed to publish {ds.name}: {e}")
+# ---------------------------
+# UI: Source Server
+# ---------------------------
+st.subheader("🔐 Source Tableau Server")
+src_url = st.text_input("Source Server URL")
+src_site = st.text_input("Source Site Content URL")
+src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
 
-def copy_permissions(src_server, dest_server, src_project_id, dest_project_id):
-    src_permissions = src_server.projects.get_permissions(src_project_id)
-    for perm in src_permissions:
-        grantee = perm.grantee
-        capabilities = perm.capabilities
-        dest_server.projects.add_permissions(dest_project_id, grantee, capabilities)
-        st.info(f"✅ Copied permissions for {grantee.name}.")
+if src_auth_method == "PAT":
+    src_token_name = st.text_input("Source PAT Name")
+    src_token_secret = st.text_input("Source PAT Secret", type="password")
+    src_username = src_password = None
+else:
+    src_username = st.text_input("Source Username")
+    src_password = st.text_input("Source Password", type="password")
+    src_token_name = src_token_secret = None
 
-def embed_credentials(server, files_and_items, is_workbook=True):
-    for item, path in files_and_items:
-        if is_workbook:
-            server.workbooks.populate_connections(item)
-            connections = item.connections
-        else:
-            server.datasources.populate_connections(item)
-            connections = item.connections
+if st.button("📤 Export Users and Groups"):
+    try:
+        src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
+        src_server = get_server(src_url)
+        with src_server.auth.sign_in(src_auth):
+            export_users(src_server)
+            export_groups_and_members(src_server)
+    except Exception as e:
+        st.error(f"❌ Export failed: {e}")
 
-        for conn in connections:
-            if conn.username and conn.password:
-                conn.embed_password = True
-                if is_workbook:
-                    server.workbooks.update_connection(item, conn)
-                else:
-                    server.datasources.update_connection(item, conn)
-                st.info(f"✅ Embedded credentials for {conn.datasource_name}.")
+# ---------------------------
+# UI: Destination Server
+# ---------------------------
+st.subheader("🔐 Destination Tableau Server")
+dest_url = st.text_input("Destination Server URL")
+dest_site = st.text_input("Destination Site Content URL")
+dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
 
-# ----------------------------
-# Streamlit UI Form
-# ----------------------------
-with st.form("migration_form"):
-    st.subheader("🔐 Source Tableau")
-    src_url = st.text_input("Source Server URL")
-    src_site = st.text_input("Source Site Content URL")
-    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
-    if src_auth_method == "PAT":
-        src_token_name = st.text_input("Source PAT Name")
-        src_token_secret = st.text_input("Source PAT Secret", type="password")
-        src_username = src_password = None
-    else:
-        src_username = st.text_input("Source Username")
-        src_password = st.text_input("Source Password", type="password")
-        src_token_name = src_token_secret = None
+if dest_auth_method == "PAT":
+    dest_token_name = st.text_input("Destination PAT Name")
+    dest_token_secret = st.text_input("Destination PAT Secret", type="password")
+    dest_username = dest_password = None
+else:
+    dest_username = st.text_input("Destination Username")
+    dest_password = st.text_input("Destination Password", type="password")
+    dest_token_name = dest_token_secret = None
 
-    st.subheader("🔐 Destination Tableau")
-    dest_url = st.text_input("Destination Server URL")
-    dest_site = st.text_input("Destination Site Content URL")
-    dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
-    if dest_auth_method == "PAT":
-        dest_token_name = st.text_input("Destination PAT Name")
-        dest_token_secret = st.text_input("Destination PAT Secret", type="password")
-        dest_username = dest_password = None
-   
-::contentReference[oaicite:0]{index=0}
- 
+# ---------------------------
+# Upload Exported CSVs
+# ---------------------------
+st.subheader("📥 Import Users & Groups to Destination")
+user_file = st.file_uploader("Upload Exported Users CSV", type=["csv"], key="user_csv")
+group_file = st.file_uploader("Upload Exported Groups CSV", type=["csv"], key="group_csv")
+
+if st.button("🚀 Migrate Users and Groups to Destination"):
+    try:
+        dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
+        dest_server = get_server(dest_url)
+        with dest_server.auth.sign_in(dest_auth):
+            if user_file:
+                import_users(dest_server, user_file)
+            if group_file:
+                import_groups_and_members(dest_server, group_file)
+    except Exception as e:
+        st.error(f"❌ Import failed: {e}")
