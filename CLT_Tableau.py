@@ -1,23 +1,27 @@
 import streamlit as st
 import tableauserverclient as TSC
 import pandas as pd
-from io import StringIO
 
 # ------------------------
 # App Header
 # ------------------------
-st.set_page_config(page_title="Tableau Export Tool", layout="centered")
+st.set_page_config(page_title="Tableau Export/Import Tool", layout="centered")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
-st.markdown("#### 🔐 Connect to Tableau Server / Cloud and export your content as CSVs")
+st.markdown("#### 🔐 Connect to Tableau Server / Cloud to Export or Import Content")
 st.markdown("---")
 
 # ------------------------
-# Input: Server & Auth
+# Mode Selection
+# ------------------------
+mode = st.radio("📁 Select Mode", ["Export Tableau Content", "Import Users & Groups"])
+st.markdown("---")
+
+# ------------------------
+# Connection Details
 # ------------------------
 st.subheader("🖥️ Tableau Connection Details")
 server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
 site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")
-
 auth_method = st.selectbox("🔑 Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
 st.markdown("---")
 
@@ -63,16 +67,23 @@ def export_datasources(server):
     to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
 
 # ------------------------
-# Main Login and Export Logic
+# Tableau Authentication & Session
 # ------------------------
-def connect_and_export(tableau_auth):
+def connect_to_tableau(auth):
+    server = TSC.Server(server_url, use_server_version=True)
+    server.auth.sign_in(auth)
+    return server
+
+# ------------------------
+# Export Mode Logic
+# ------------------------
+def run_export(auth):
     try:
-        server = TSC.Server(server_url, use_server_version=True)
-        server.auth.sign_in(tableau_auth)
+        with st.spinner("🔄 Connecting to Tableau..."):
+            server = connect_to_tableau(auth)
         st.success("✅ Connected successfully!")
 
         with st.expander("📋 Export Tableau Content (click to expand)"):
-            st.write("Download data from the connected site:")
             export_users(server)
             export_groups(server)
             export_projects(server)
@@ -85,35 +96,66 @@ def connect_and_export(tableau_auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Auth Form
+# Import Mode Logic
+# ------------------------
+def run_import(auth):
+    try:
+        with st.spinner("🔄 Connecting to Tableau..."):
+            server = connect_to_tableau(auth)
+        st.success("✅ Connected successfully!")
+
+        user_csv = st.file_uploader("📤 Upload Users CSV", type="csv")
+        group_csv = st.file_uploader("📤 Upload Groups CSV", type="csv")
+
+        if user_csv:
+            df_users = pd.read_csv(user_csv)
+            st.write("👤 Users Preview:", df_users.head())
+            if st.button("🚀 Import Users"):
+                for _, row in df_users.iterrows():
+                    try:
+                        new_user = TSC.UserItem(name=row["name"], site_role=row["site_role"], full_name=row.get("fullname", ""), email=row.get("email", ""))
+                        server.users.add(new_user)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not add user {row['name']}: {e}")
+                st.success("✅ Users imported!")
+
+        if group_csv:
+            df_groups = pd.read_csv(group_csv)
+            st.write("👥 Groups Preview:", df_groups.head())
+            if st.button("🚀 Import Groups"):
+                for _, row in df_groups.iterrows():
+                    try:
+                        new_group = TSC.GroupItem(name=row["group_name"])
+                        server.groups.create(new_group)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not create group {row['group_name']}: {e}")
+                st.success("✅ Groups imported!")
+
+        server.auth.sign_out()
+        st.info("🔐 Signed out successfully.")
+    except Exception as e:
+        st.error(f"❌ Import failed: {str(e)}")
+
+# ------------------------
+# Main Action
 # ------------------------
 if auth_method == "PAT (Personal Access Token)":
-    st.subheader("🔐 Enter PAT Credentials")
     token_name = st.text_input("PAT Name")
     token_value = st.text_input("PAT Secret", type="password")
-
-    if st.button("🔌 Connect with PAT"):
-        tableau_auth = TSC.PersonalAccessTokenAuth(
-            token_name=token_name,
-            personal_access_token=token_value,
-            site_id=site_content_url
-        )
-        connect_and_export(tableau_auth)
+    if st.button(f"🔌 {'Export' if mode == 'Export Tableau Content' else 'Import'} with PAT"):
+        auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
+        run_export(auth) if mode == "Export Tableau Content" else run_import(auth)
 
 else:
-    st.subheader("👤 Enter Username and Password")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-
-    if st.button("🔌 Connect with Username & Password"):
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_content_url)
-        connect_and_export(tableau_auth)
+    if st.button(f"🔌 {'Export' if mode == 'Export Tableau Content' else 'Import'} with Username & Password"):
+        auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+        run_export(auth) if mode == "Export Tableau Content" else run_import(auth)
 
 # ------------------------
-# Footer / Signature (Always Visible)
+# Footer
 # ------------------------
-
-# This will make the footer always stay at the bottom of the page
 st.markdown(
     """
     <style>
@@ -128,7 +170,8 @@ st.markdown(
     }
     </style>
     <div class="footer">
-        Developed with by <strong>Mohd Sajjad</strong>
+        Developed with ❤️ by <strong>Mohd Sajjad</strong>
     </div>
-    """, unsafe_allow_html=True
+    """,
+    unsafe_allow_html=True
 )
