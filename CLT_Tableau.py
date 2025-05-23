@@ -6,7 +6,7 @@ import pandas as pd
 # App Header
 # ------------------------
 st.set_page_config(page_title="Tableau Export/Import Tool", layout="centered")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World CLT</h1>", unsafe_allow_html=True)
 st.markdown("#### 🔐 Connect to Tableau Server / Cloud to Export or Import Content")
 st.markdown("---")
 
