@@ -1,9 +1,9 @@
 import streamlit as st
 import tableauserverclient as TSC
 import pandas as pd
-import os
+import io
 
-# Set Streamlit page config
+# Page Config
 st.set_page_config(page_title="Tableau User & Group Migration", layout="wide")
 st.title("🔁 Tableau User & Group Migration Tool")
 
@@ -29,23 +29,24 @@ def export_users(server):
         "SiteRole": user.site_role
     } for user in users]
     df = pd.DataFrame(user_data)
-    df.to_csv("users_export.csv", index=False)
-    st.success("✅ Exported users to users_export.csv")
     return df
 
 def export_groups_and_members(server):
     groups, _ = server.groups.get()
     group_data = []
+
     for group in groups:
-        users_in_group, _ = server.groups.get_users(group.id)
-        for user in users_in_group:
-            group_data.append({
-                "GroupName": group.name,
-                "Username": user.name
-            })
+        try:
+            server.groups.populate(group)
+            for user in group.users:
+                group_data.append({
+                    "GroupName": group.name,
+                    "Username": user.name
+                })
+        except Exception as e:
+            st.error(f"❌ Failed to get users for group {group.name}: {e}")
+
     df = pd.DataFrame(group_data)
-    df.to_csv("groups_export.csv", index=False)
-    st.success("✅ Exported groups and memberships to groups_export.csv")
     return df
 
 def import_users(server, user_file):
@@ -90,7 +91,7 @@ def import_groups_and_members(server, group_file):
 # ---------------------------
 st.subheader("🔐 Source Tableau Server")
 src_url = st.text_input("Source Server URL")
-src_site = st.text_input("Source Site Content URL")
+src_site = st.text_input("Source Site Content URL (leave blank for Default site)")
 src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
 
 if src_auth_method == "PAT":
@@ -107,8 +108,17 @@ if st.button("📤 Export Users and Groups"):
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         with src_server.auth.sign_in(src_auth):
-            export_users(src_server)
-            export_groups_and_members(src_server)
+            users_df = export_users(src_server)
+            groups_df = export_groups_and_members(src_server)
+
+            users_csv = users_df.to_csv(index=False).encode('utf-8')
+            groups_csv = groups_df.to_csv(index=False).encode('utf-8')
+
+            st.success("✅ Export successful!")
+
+            st.download_button("⬇️ Download Users CSV", data=users_csv, file_name="users_export.csv", mime="text/csv")
+            st.download_button("⬇️ Download Groups CSV", data=groups_csv, file_name="groups_export.csv", mime="text/csv")
+
     except Exception as e:
         st.error(f"❌ Export failed: {e}")
 
@@ -117,7 +127,7 @@ if st.button("📤 Export Users and Groups"):
 # ---------------------------
 st.subheader("🔐 Destination Tableau Server")
 dest_url = st.text_input("Destination Server URL")
-dest_site = st.text_input("Destination Site Content URL")
+dest_site = st.text_input("Destination Site Content URL (leave blank for Default site)")
 dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
 
 if dest_auth_method == "PAT":
@@ -145,5 +155,6 @@ if st.button("🚀 Migrate Users and Groups to Destination"):
                 import_users(dest_server, user_file)
             if group_file:
                 import_groups_and_members(dest_server, group_file)
+            st.success("✅ Migration completed.")
     except Exception as e:
         st.error(f"❌ Import failed: {e}")
