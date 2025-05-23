@@ -5,7 +5,7 @@ import re
 
 # Page setup
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World(Tableau_Migration)</h1>", unsafe_allow_html=True)
 st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
