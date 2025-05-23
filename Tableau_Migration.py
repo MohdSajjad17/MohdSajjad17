@@ -11,34 +11,41 @@ with st.form("migration_form"):
     src_url = st.text_input("Source Server URL", "https://prod-apsoutheast-b.online.tableau.com")
     src_site = st.text_input("Source Site Content URL")
     src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
+    
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
         src_token_secret = st.text_input("Source PAT Secret", type="password")
+        src_username = src_password = None
     else:
         src_username = st.text_input("Source Username")
         src_password = st.text_input("Source Password", type="password")
+        src_token_name = src_token_secret = None
 
-    st.text("")
+    st.divider()
 
     st.subheader("🔐 Destination Tableau Credentials")
     dest_url = st.text_input("Destination Server URL")
     dest_site = st.text_input("Destination Site Content URL")
     dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
+    
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
         dest_token_secret = st.text_input("Destination PAT Secret", type="password")
+        dest_username = dest_password = None
     else:
         dest_username = st.text_input("Destination Username")
         dest_password = st.text_input("Destination Password", type="password")
+        dest_token_name = dest_token_secret = None
 
-    st.text("")
+    st.divider()
+
     st.subheader("📦 Project Mapping")
     source_proj = st.text_input("Source Project Name")
     dest_proj = st.text_input("Destination Project Name")
 
     submitted = st.form_submit_button("🚀 Start Migration")
 
-# Auth Helpers
+# Helper Functions
 def get_auth(method, token_name, token_value, username, password, site):
     if method == "PAT":
         return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site)
@@ -48,6 +55,7 @@ def get_auth(method, token_name, token_value, username, password, site):
 def get_server(url):
     return TSC.Server(url, use_server_version=True)
 
+# Run Migration on Submit
 if submitted:
     try:
         # Auth objects
@@ -96,12 +104,12 @@ if submitted:
                 st.warning(f"❌ Failed to publish {wb_name}: {e}")
 
         dest_server.auth.sign_out()
-        st.success("🎉 Migration completed!")
+        st.success("🎉 Migration completed successfully!")
 
     except Exception as final_error:
         st.error(f"❌ Migration failed: {final_error}")
 
-# Footer
+# Signature Footer
 st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 50px; color: #888; font-size: 16px; }
