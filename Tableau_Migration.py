@@ -58,20 +58,21 @@ def download_workbooks(server, project_id, project_name):
 
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
     try:
+        # Populate permissions first
         src_server.workbooks.populate_permissions(src_wb)
         dest_server.workbooks.populate_permissions(dest_wb)
 
-        src_permissions = src_server.workbooks._permissions.get(src_wb)
-        dest_permissions = dest_server.workbooks._permissions.get(dest_wb)
+        # Access the populated permissions
+        src_permissions = src_wb.permissions
+        dest_permissions = dest_wb.permissions
 
+        # Clear existing destination permissions
         for perm in dest_permissions:
             dest_server.workbooks._permissions.delete(dest_wb, perm)
 
+        # Add permissions from source
         for perm in src_permissions:
-            new_perm = TSC.PermissionsRule(
-                grantee=perm.grantee,
-                capabilities=perm.capabilities
-            )
+            new_perm = TSC.PermissionsRule(grantee=perm.grantee, capabilities=perm.capabilities)
             dest_server.workbooks._permissions.add(dest_wb, new_perm)
 
         st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
@@ -131,7 +132,6 @@ if submitted:
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Connect to source Tableau server
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
@@ -148,7 +148,6 @@ if submitted:
             src_server.auth.sign_out()
             st.stop()
 
-        # Connect to destination Tableau server
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
@@ -160,13 +159,10 @@ if submitted:
             dest_server.auth.sign_out()
             st.stop()
 
-        # Publish and migrate
         publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id)
 
-        # Sign out
         src_server.auth.sign_out()
         dest_server.auth.sign_out()
-
         st.success("🎉 Migration completed successfully!")
 
     except Exception as e:
