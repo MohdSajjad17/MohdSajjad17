@@ -96,7 +96,7 @@ def run_export(auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Import Mode Logic
+# Import Mode Logic (NO validation, just pass CSV values)
 # ------------------------
 def run_import(import_type, uploaded_file, auth):
     if not uploaded_file:
@@ -114,28 +114,79 @@ def run_import(import_type, uploaded_file, auth):
         if import_type == "Users":
             for _, row in df.iterrows():
                 try:
+                    row_dict = row.dropna().to_dict()
+
+                    # Map keys that exist in UserItem params to pass dynamically
+                    user_kwargs = {}
+
+                    # Valid UserItem params to accept - adjust as needed
+                    valid_keys = {
+                        "name", "site_role", "full_name", "email",
+                        "auth_setting", "external_auth_user_id", "locale",
+                        "password", "password_never_expires", "must_change_password",
+                        "content_admin", "server_role", "tags"
+                    }
+
+                    for k, v in row_dict.items():
+                        key_lower = k.lower()
+                        if key_lower in valid_keys:
+                            user_kwargs[key_lower] = v
+
+                    # name and site_role are required - if missing, will error at Tableau API
+                    if "name" not in user_kwargs or "site_role" not in user_kwargs:
+                        st.warning(f"Skipping row because 'name' or 'site_role' missing: {row_dict}")
+                        continue
+
+                    # Create user with dynamic kwargs (convert keys to correct UserItem attributes)
                     new_user = TSC.UserItem(
-                        name=row["name"],
-                        site_role=row["site_role"],
-                        full_name=row.get("fullname", ""),
-                        email=row.get("email", "")
+                        name=user_kwargs.get("name"),
+                        site_role=user_kwargs.get("site_role"),
+                        full_name=user_kwargs.get("full_name"),
+                        email=user_kwargs.get("email"),
+                        auth_setting=user_kwargs.get("auth_setting"),
+                        external_auth_user_id=user_kwargs.get("external_auth_user_id"),
+                        locale=user_kwargs.get("locale"),
+                        password=user_kwargs.get("password"),
+                        password_never_expires=user_kwargs.get("password_never_expires"),
+                        must_change_password=user_kwargs.get("must_change_password"),
+                        content_admin=user_kwargs.get("content_admin"),
+                        server_role=user_kwargs.get("server_role"),
+                        tags=user_kwargs.get("tags"),
                     )
                     server.users.add(new_user)
+
                 except Exception as e:
-                    st.warning(f"⚠️ Could not add user {row['name']}: {e}")
+                    st.warning(f"⚠️ Could not add user {row.get('name', 'unknown')}: {e}")
+
             st.success("✅ All users imported!")
 
         elif import_type == "Groups":
             for _, row in df.iterrows():
                 try:
-                    new_group = TSC.GroupItem(name=row["group_name"])
+                    row_dict = row.dropna().to_dict()
+                    # Expecting the CSV to have the group name column, but we do not enforce any column name.
+                    # We will just find the first non-null string value as group name.
+                    group_name = None
+                    for val in row_dict.values():
+                        if isinstance(val, str) and val.strip():
+                            group_name = val.strip()
+                            break
+
+                    if not group_name:
+                        st.warning(f"Skipping row with no valid group name: {row_dict}")
+                        continue
+
+                    new_group = TSC.GroupItem(name=group_name)
                     server.groups.create(new_group)
+
                 except Exception as e:
-                    st.warning(f"⚠️ Could not create group {row['group_name']}: {e}")
+                    st.warning(f"⚠️ Could not create group {group_name if group_name else 'unknown'}: {e}")
+
             st.success("✅ All groups imported!")
 
         server.auth.sign_out()
         st.info("🔐 Signed out successfully.")
+
     except Exception as e:
         st.error(f"❌ Import failed: {str(e)}")
 
@@ -161,11 +212,11 @@ elif mode == "Import Users & Groups":
     import_type = st.selectbox("Import Type", ["Users", "Groups"])
 
     if import_type == "Users":
-        uploaded_file = st.file_uploader("📤 Upload Users CSV", type="csv")
-        st.markdown("Example: `name, fullname, email, site_role`")
+        uploaded_file = st.file_uploader("📤 Upload Users CSV (any format with needed columns)", type="csv")
+        st.markdown("Upload your user CSV file — columns will be used as-is.")
     else:
-        uploaded_file = st.file_uploader("📤 Upload Groups CSV", type="csv")
-        st.markdown("Example: `group_name`")
+        uploaded_file = st.file_uploader("📤 Upload Groups CSV (any format with group names)", type="csv")
+        st.markdown("Upload your group CSV file — the first string column value in each row will be used as group name.")
 
     st.markdown("---")
     st.subheader("🔐 Tableau Credentials")
