@@ -98,38 +98,41 @@ def run_export(auth):
 # ------------------------
 # Import Mode Logic
 # ------------------------
-def run_import(auth):
+def run_import(import_type, uploaded_file, auth):
+    if not uploaded_file:
+        st.warning("⚠️ Please upload a CSV file before importing.")
+        return
+
     try:
         with st.spinner("🔄 Connecting to Tableau..."):
             server = connect_to_tableau(auth)
-        st.success("✅ Connected successfully!")
+        st.success("✅ Connected to Tableau")
 
-        user_csv = st.file_uploader("📤 Upload Users CSV", type="csv")
-        group_csv = st.file_uploader("📤 Upload Groups CSV", type="csv")
+        df = pd.read_csv(uploaded_file)
+        st.write("📄 CSV Preview:", df.head())
 
-        if user_csv:
-            df_users = pd.read_csv(user_csv)
-            st.write("👤 Users Preview:", df_users.head())
-            if st.button("🚀 Import Users"):
-                for _, row in df_users.iterrows():
-                    try:
-                        new_user = TSC.UserItem(name=row["name"], site_role=row["site_role"], full_name=row.get("fullname", ""), email=row.get("email", ""))
-                        server.users.add(new_user)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not add user {row['name']}: {e}")
-                st.success("✅ Users imported!")
+        if import_type == "Users":
+            for _, row in df.iterrows():
+                try:
+                    new_user = TSC.UserItem(
+                        name=row["name"],
+                        site_role=row["site_role"],
+                        full_name=row.get("fullname", ""),
+                        email=row.get("email", "")
+                    )
+                    server.users.add(new_user)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not add user {row['name']}: {e}")
+            st.success("✅ All users imported!")
 
-        if group_csv:
-            df_groups = pd.read_csv(group_csv)
-            st.write("👥 Groups Preview:", df_groups.head())
-            if st.button("🚀 Import Groups"):
-                for _, row in df_groups.iterrows():
-                    try:
-                        new_group = TSC.GroupItem(name=row["group_name"])
-                        server.groups.create(new_group)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not create group {row['group_name']}: {e}")
-                st.success("✅ Groups imported!")
+        elif import_type == "Groups":
+            for _, row in df.iterrows():
+                try:
+                    new_group = TSC.GroupItem(name=row["group_name"])
+                    server.groups.create(new_group)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not create group {row['group_name']}: {e}")
+            st.success("✅ All groups imported!")
 
         server.auth.sign_out()
         st.info("🔐 Signed out successfully.")
@@ -137,21 +140,48 @@ def run_import(auth):
         st.error(f"❌ Import failed: {str(e)}")
 
 # ------------------------
-# Main Action
+# Mode Handling
 # ------------------------
-if auth_method == "PAT (Personal Access Token)":
-    token_name = st.text_input("PAT Name")
-    token_value = st.text_input("PAT Secret", type="password")
-    if st.button(f"🔌 {'Export' if mode == 'Export Tableau Content' else 'Import'} with PAT"):
-        auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
-        run_export(auth) if mode == "Export Tableau Content" else run_import(auth)
+if mode == "Export Tableau Content":
+    if auth_method == "PAT (Personal Access Token)":
+        token_name = st.text_input("PAT Name")
+        token_value = st.text_input("PAT Secret", type="password")
+        if st.button("🔌 Export with PAT"):
+            auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
+            run_export(auth)
+    else:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("🔌 Export with Username & Password"):
+            auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+            run_export(auth)
 
-else:
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    if st.button(f"🔌 {'Export' if mode == 'Export Tableau Content' else 'Import'} with Username & Password"):
-        auth = TSC.TableauAuth(username, password, site_id=site_content_url)
-        run_export(auth) if mode == "Export Tableau Content" else run_import(auth)
+elif mode == "Import Users & Groups":
+    st.subheader("📥 Select What to Import")
+    import_type = st.selectbox("Import Type", ["Users", "Groups"])
+
+    if import_type == "Users":
+        uploaded_file = st.file_uploader("📤 Upload Users CSV", type="csv")
+        st.markdown("Example: `name, fullname, email, site_role`")
+    else:
+        uploaded_file = st.file_uploader("📤 Upload Groups CSV", type="csv")
+        st.markdown("Example: `group_name`")
+
+    st.markdown("---")
+    st.subheader("🔐 Tableau Credentials")
+
+    if auth_method == "PAT (Personal Access Token)":
+        token_name = st.text_input("PAT Name")
+        token_value = st.text_input("PAT Secret", type="password")
+        if st.button("🚀 Import Now"):
+            auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
+            run_import(import_type, uploaded_file, auth)
+    else:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("🚀 Import Now"):
+            auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+            run_import(import_type, uploaded_file, auth)
 
 # ------------------------
 # Footer
