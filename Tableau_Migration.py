@@ -61,12 +61,12 @@ def download_workbooks(server, project_id, project_name):
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
     try:
         # Get permissions from source workbook
-        src_permissions, _ = src_server.workbooks.get_permissions(src_wb.id)
+        src_permissions, _ = src_server.permissions.get(src_wb)
         
         # Clear existing permissions on destination workbook before applying new ones (optional)
-        dest_permissions, _ = dest_server.workbooks.get_permissions(dest_wb.id)
+        dest_permissions, _ = dest_server.permissions.get(dest_wb)
         for perm in dest_permissions:
-            dest_server.workbooks.delete_permission(dest_wb.id, perm.id)
+            dest_server.permissions.delete(dest_wb, perm)
 
         # Apply source permissions to destination workbook
         for perm in src_permissions:
@@ -74,7 +74,7 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
                 grantee=perm.grantee,
                 capabilities=perm.capabilities
             )
-            dest_server.workbooks.add_permission(dest_wb.id, new_perm)
+            dest_server.permissions.add(dest_wb, new_perm)
         st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
     except Exception as e:
         st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
