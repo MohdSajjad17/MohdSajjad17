@@ -3,7 +3,6 @@ import tableauserverclient as TSC
 import os
 import re
 
-# Page setup
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -13,9 +12,6 @@ st.markdown("""
     <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
-# ----------------------------
-# Helper functions
-# ----------------------------
 def sanitize(name):
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
@@ -48,7 +44,7 @@ def download_workbooks(server, project_id, project_name):
         path = get_local_path("source", project_name, wb.name)
         st.info(f"⬇️ Downloading: {wb.name}")
         try:
-            file_path = server.workbooks.download(wb.id, filepath=path)  # FIXED: removed no_extract
+            file_path = server.workbooks.download(wb.id, filepath=path)
             if os.path.exists(file_path):
                 files.append((wb, file_path))
                 st.success(f"✅ Downloaded: {wb.name}")
@@ -58,13 +54,70 @@ def download_workbooks(server, project_id, project_name):
             st.error(f"❌ Download failed for {wb.name}: {e}")
     return files
 
-def publish_workbooks(server, files_and_wbs, dest_project_id, project_name):
+def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
+    try:
+        src_server.workbooks.populate_permissions(src_wb)
+        dest_server.workbooks.populate_permissions(dest_wb)
+
+        src_perms = src_wb.permissions
+        dest_perms = dest_wb.permissions
+
+        for perm in dest_perms:
+            dest_server.workbooks._permissions.delete(dest_wb, perm)
+
+        src_users, _ = src_server.users.get()
+        src_groups, _ = src_server.groups.get()
+        dest_users, _ = dest_server.users.get()
+        dest_groups, _ = dest_server.groups.get()
+
+        src_user_map = {u.id: u for u in src_users}
+        src_group_map = {g.id: g for g in src_groups}
+        dest_user_map = {u.name: u for u in dest_users}
+        dest_group_map = {g.name: g for g in dest_groups}
+
+        missing_grantees = []
+
+        for perm in src_perms:
+            grantee_ref = perm.grantee
+            dest_grantee = None
+
+            if grantee_ref.tag_name == 'user':
+                src_user = src_user_map.get(grantee_ref.id)
+                if src_user and src_user.name in dest_user_map:
+                    dest_grantee = dest_user_map[src_user.name]
+                else:
+                    missing_grantees.append(src_user.name if src_user else grantee_ref.id)
+
+            elif grantee_ref.tag_name == 'group':
+                src_group = src_group_map.get(grantee_ref.id)
+                if src_group and src_group.name in dest_group_map:
+                    dest_grantee = dest_group_map[src_group.name]
+                else:
+                    missing_grantees.append(src_group.name if src_group else grantee_ref.id)
+
+            if dest_grantee:
+                new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
+                dest_server.workbooks.update_permissions(dest_wb, [new_perm])
+            else:
+                st.warning(f"⚠️ Skipped permission for unknown grantee with ID: {grantee_ref.id}")
+
+        if missing_grantees:
+            st.info("ℹ️ Skipped the following missing users/groups:")
+            st.write(list(set(missing_grantees)))
+
+        st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
+
+    except Exception as e:
+        st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
+
+def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
     for wb, path in files_and_wbs:
         st.info(f"⬆️ Publishing: {wb.name}")
         try:
             new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
-            server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
+            published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.Overwrite)
             st.success(f"✅ Published: {wb.name}")
+            migrate_permissions(src_server, wb, dest_server, published_wb)
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
 
@@ -74,7 +127,7 @@ def publish_workbooks(server, files_and_wbs, dest_project_id, project_name):
 with st.form("migration_form"):
     st.subheader("🔐 Source Tableau")
     src_url = st.text_input("Source Server URL")
-    src_site = st.text_input("Source Site Content URL")
+    src_site = st.text_input("Source Site Content URL (leave blank for default site)")
     src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
@@ -87,7 +140,7 @@ with st.form("migration_form"):
 
     st.subheader("🔐 Destination Tableau")
     dest_url = st.text_input("Destination Server URL")
-    dest_site = st.text_input("Destination Site Content URL")
+    dest_site = st.text_input("Destination Site Content URL (leave blank for default site)")
     dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
@@ -109,36 +162,39 @@ with st.form("migration_form"):
 # ----------------------------
 if submitted:
     try:
-        # Step 1: Create folder structure
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Step 2: Connect to Source
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
+
         src_proj_obj = next((p for p in src_server.projects.get()[0] if p.name == source_proj), None)
         if not src_proj_obj:
             st.error(f"❌ Source project '{source_proj}' not found.")
+            src_server.auth.sign_out()
             st.stop()
-        files_and_wbs = download_workbooks(src_server, src_proj_obj.id, source_proj)
-        src_server.auth.sign_out()
 
+        files_and_wbs = download_workbooks(src_server, src_proj_obj.id, source_proj)
         if not files_and_wbs:
             st.warning("⚠️ No workbooks downloaded.")
+            src_server.auth.sign_out()
             st.stop()
 
-        # Step 3: Connect to Destination
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
+
         dest_proj_obj = next((p for p in dest_server.projects.get()[0] if p.name == dest_proj), None)
         if not dest_proj_obj:
             st.error(f"❌ Destination project '{dest_proj}' not found.")
+            src_server.auth.sign_out()
+            dest_server.auth.sign_out()
             st.stop()
 
-        # Step 4: Publish
-        publish_workbooks(dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+        publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+
+        src_server.auth.sign_out()
         dest_server.auth.sign_out()
 
         st.success("🎉 Migration completed successfully!")
