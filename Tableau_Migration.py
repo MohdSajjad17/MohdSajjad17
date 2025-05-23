@@ -1,6 +1,7 @@
 import streamlit as st
 import tableauserverclient as TSC
 import os
+import re
 
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
@@ -11,7 +12,7 @@ with st.form("migration_form"):
     src_url = st.text_input("Source Server URL", "https://prod-apsoutheast-b.online.tableau.com")
     src_site = st.text_input("Source Site Content URL")
     src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
-    
+
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
         src_token_secret = st.text_input("Source PAT Secret", type="password")
@@ -27,7 +28,7 @@ with st.form("migration_form"):
     dest_url = st.text_input("Destination Server URL")
     dest_site = st.text_input("Destination Site Content URL")
     dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
-    
+
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
         dest_token_secret = st.text_input("Destination PAT Secret", type="password")
@@ -58,13 +59,17 @@ def get_server(url):
 # Run Migration on Submit
 if submitted:
     try:
-        # Auth objects
+        temp_folder = os.path.join(os.getcwd(), "temp_workbooks")
+        os.makedirs(temp_folder, exist_ok=True)
+
+        # Authenticate
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
 
-        # Connect to source
+        # Source login
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
+
         src_projects, _ = src_server.projects.get()
         src_proj_obj = next((p for p in src_projects if p.name == source_proj), None)
         if not src_proj_obj:
@@ -72,12 +77,15 @@ if submitted:
 
         src_workbooks, _ = src_server.workbooks.get()
         workbooks_to_migrate = [w for w in src_workbooks if w.project_id == src_proj_obj.id]
+
         if not workbooks_to_migrate:
             st.warning("⚠️ No workbooks found in source project.")
+
         downloaded = []
         for wb in workbooks_to_migrate:
             try:
-                path = f"{wb.name}.twbx"
+                safe_name = re.sub(r'[^\w\-_\. ]', '_', wb.name)
+                path = os.path.join(temp_folder, f"{safe_name}.twbx")
                 src_server.workbooks.download(wb.id, filepath=path)
                 downloaded.append((wb.name, path))
                 st.info(f"✅ Downloaded: {wb.name}")
@@ -85,9 +93,10 @@ if submitted:
                 st.warning(f"❌ Failed to download {wb.name}: {e}")
         src_server.auth.sign_out()
 
-        # Connect to destination
+        # Destination login
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
+
         dest_projects, _ = dest_server.projects.get()
         dest_proj_obj = next((p for p in dest_projects if p.name == dest_proj), None)
         if not dest_proj_obj:
@@ -98,8 +107,8 @@ if submitted:
                 new_wb = TSC.WorkbookItem(name=wb_name, project_id=dest_proj_obj.id)
                 with open(path, 'rb') as f:
                     dest_server.workbooks.publish(new_wb, f.name, mode=TSC.Server.PublishMode.CreateNew)
-                os.remove(path)
                 st.success(f"📤 Published: {wb_name}")
+                os.remove(path)
             except Exception as e:
                 st.warning(f"❌ Failed to publish {wb_name}: {e}")
 
@@ -109,7 +118,7 @@ if submitted:
     except Exception as final_error:
         st.error(f"❌ Migration failed: {final_error}")
 
-# Signature Footer
+# Footer
 st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 50px; color: #888; font-size: 16px; }
