@@ -80,6 +80,8 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
         for perm in dest_perms:
             dest_server.workbooks._permissions.delete(dest_wb, perm)
 
+        missing_grantees = []
+
         # Add source permissions to destination workbook
         for perm in src_perms:
             grantee = perm.grantee
@@ -87,18 +89,19 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
 
             if isinstance(grantee, TSC.UserItem):
                 dest_grantee = get_dest_user_by_name(dest_server, grantee.name)
-                if not dest_grantee:
-                    st.warning(f"⚠️ User '{grantee.name}' not found on destination. Skipping.")
-                    continue
-
             elif isinstance(grantee, TSC.GroupItem):
                 dest_grantee = get_dest_group_by_name(dest_server, grantee.name)
-                if not dest_grantee:
-                    st.warning(f"⚠️ Group '{grantee.name}' not found on destination. Skipping.")
-                    continue
 
-            new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
-            dest_server.workbooks.update_permissions(dest_wb, [new_perm])
+            if dest_grantee:
+                new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
+                dest_server.workbooks.update_permissions(dest_wb, [new_perm])
+            else:
+                st.warning(f"⚠️ Skipped permission for missing grantee: {grantee.name}")
+                missing_grantees.append(grantee.name)
+
+        if missing_grantees:
+            st.info("ℹ️ Skipped the following missing users/groups:")
+            st.write(list(set(missing_grantees)))
 
         st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
     except Exception as e:
