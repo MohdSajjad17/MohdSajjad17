@@ -1,113 +1,105 @@
 import streamlit as st
 import tableauserverclient as TSC
-import pandas as pd
 import os
 
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Tableau Content Migration Tool</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 
-# Sidebar for source and destination login
-st.sidebar.title("🔐 Tableau Login")
+# Input Form
+with st.form("migration_form"):
+    st.subheader("🔐 Source Tableau Credentials")
+    src_url = st.text_input("Source Server URL", "https://prod-apsoutheast-b.online.tableau.com")
+    src_site = st.text_input("Source Site Content URL")
+    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
+    if src_auth_method == "PAT":
+        src_token_name = st.text_input("Source PAT Name")
+        src_token_secret = st.text_input("Source PAT Secret", type="password")
+    else:
+        src_username = st.text_input("Source Username")
+        src_password = st.text_input("Source Password", type="password")
 
-auth_section = st.sidebar.radio("Choose Environment to Connect:", ["Source Site", "Destination Site"])
-server_url = st.sidebar.text_input(f"{auth_section} - Tableau URL", "https://prod-apsoutheast-b.online.tableau.com")
-site_content_url = st.sidebar.text_input(f"{auth_section} - Site Content URL", "")
-auth_method = st.sidebar.selectbox(f"{auth_section} - Auth Method", ["PAT", "Username & Password"])
+    st.text("")
 
-# Auth fields
-if auth_method == "PAT":
-    token_name = st.sidebar.text_input(f"{auth_section} - PAT Name")
-    token_value = st.sidebar.text_input(f"{auth_section} - PAT Secret", type="password")
-else:
-    username = st.sidebar.text_input(f"{auth_section} - Username")
-    password = st.sidebar.text_input(f"{auth_section} - Password", type="password")
+    st.subheader("🔐 Destination Tableau Credentials")
+    dest_url = st.text_input("Destination Server URL")
+    dest_site = st.text_input("Destination Site Content URL")
+    dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
+    if dest_auth_method == "PAT":
+        dest_token_name = st.text_input("Destination PAT Name")
+        dest_token_secret = st.text_input("Destination PAT Secret", type="password")
+    else:
+        dest_username = st.text_input("Destination Username")
+        dest_password = st.text_input("Destination Password", type="password")
 
-# Auth helper
-def get_auth():
-    if auth_method == "PAT":
-        return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
-    return TSC.TableauAuth(username, password, site_id=site_content_url)
+    st.text("")
+    st.subheader("📦 Project Mapping")
+    source_proj = st.text_input("Source Project Name")
+    dest_proj = st.text_input("Destination Project Name")
 
-def get_server():
-    return TSC.Server(server_url, use_server_version=True)
+    submitted = st.form_submit_button("🚀 Start Migration")
 
-# Cache projects per environment
-if 'source_projects' not in st.session_state:
-    st.session_state.source_projects = []
-if 'destination_projects' not in st.session_state:
-    st.session_state.destination_projects = []
+# Auth Helpers
+def get_auth(method, token_name, token_value, username, password, site):
+    if method == "PAT":
+        return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site)
+    else:
+        return TSC.TableauAuth(username, password, site_id=site)
 
-# Project Fetch
-if st.sidebar.button(f"🔍 Fetch Projects for {auth_section}"):
+def get_server(url):
+    return TSC.Server(url, use_server_version=True)
+
+if submitted:
     try:
-        auth = get_auth()
-        server = get_server()
-        server.auth.sign_in(auth)
-        projects, _ = server.projects.get()
-        names = sorted([p.name for p in projects])
-        if auth_section == "Source Site":
-            st.session_state.source_projects = names
-        else:
-            st.session_state.destination_projects = names
-        st.sidebar.success(f"✅ Projects loaded for {auth_section}")
-        server.auth.sign_out()
-    except Exception as e:
-        st.sidebar.error(f"Error: {e}")
+        # Auth objects
+        src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
+        dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
 
-# Project mapping UI
-st.subheader("🔀 Project Mapping")
-if st.session_state.source_projects and st.session_state.destination_projects:
-    source_proj = st.selectbox("Source Project", st.session_state.source_projects)
-    dest_proj = st.selectbox("Destination Project", st.session_state.destination_projects)
-    migrate_btn = st.button("🚀 Migrate Workbooks")
+        # Connect to source
+        src_server = get_server(src_url)
+        src_server.auth.sign_in(src_auth)
+        src_projects, _ = src_server.projects.get()
+        src_proj_obj = next((p for p in src_projects if p.name == source_proj), None)
+        if not src_proj_obj:
+            raise Exception(f"Source project '{source_proj}' not found.")
 
-    if migrate_btn:
-        try:
-            # Login to source
-            source_auth = get_auth()
-            source_server = get_server()
-            source_server.auth.sign_in(source_auth)
-
-            # Get project ID from name
-            projects, _ = source_server.projects.get()
-            src_proj_obj = next(p for p in projects if p.name == source_proj)
-
-            # Download workbooks from source
-            workbooks, _ = source_server.workbooks.get()
-            filtered = [w for w in workbooks if w.project_id == src_proj_obj.id]
-
-            downloaded_files = []
-            for wb in filtered:
+        src_workbooks, _ = src_server.workbooks.get()
+        workbooks_to_migrate = [w for w in src_workbooks if w.project_id == src_proj_obj.id]
+        if not workbooks_to_migrate:
+            st.warning("⚠️ No workbooks found in source project.")
+        downloaded = []
+        for wb in workbooks_to_migrate:
+            try:
                 path = f"{wb.name}.twbx"
-                source_server.workbooks.download(wb.id, filepath=path)
-                downloaded_files.append((wb.name, path))
-            source_server.auth.sign_out()
+                src_server.workbooks.download(wb.id, filepath=path)
+                downloaded.append((wb.name, path))
+                st.info(f"✅ Downloaded: {wb.name}")
+            except Exception as e:
+                st.warning(f"❌ Failed to download {wb.name}: {e}")
+        src_server.auth.sign_out()
 
-            st.success(f"✅ Downloaded {len(downloaded_files)} workbooks from source.")
+        # Connect to destination
+        dest_server = get_server(dest_url)
+        dest_server.auth.sign_in(dest_auth)
+        dest_projects, _ = dest_server.projects.get()
+        dest_proj_obj = next((p for p in dest_projects if p.name == dest_proj), None)
+        if not dest_proj_obj:
+            raise Exception(f"Destination project '{dest_proj}' not found.")
 
-            # Login to destination
-            dest_auth = get_auth()
-            dest_server = get_server()
-            dest_server.auth.sign_in(dest_auth)
-
-            # Get destination project ID
-            projects_dest, _ = dest_server.projects.get()
-            dest_proj_obj = next(p for p in projects_dest if p.name == dest_proj)
-
-            # Publish to destination
-            for wb_name, path in downloaded_files:
+        for wb_name, path in downloaded:
+            try:
                 new_wb = TSC.WorkbookItem(name=wb_name, project_id=dest_proj_obj.id)
                 with open(path, 'rb') as f:
                     dest_server.workbooks.publish(new_wb, f.name, mode=TSC.Server.PublishMode.CreateNew)
                 os.remove(path)
+                st.success(f"📤 Published: {wb_name}")
+            except Exception as e:
+                st.warning(f"❌ Failed to publish {wb_name}: {e}")
 
-            dest_server.auth.sign_out()
-            st.success("🎉 Migration complete!")
+        dest_server.auth.sign_out()
+        st.success("🎉 Migration completed!")
 
-        except Exception as e:
-            st.error(f"❌ Migration failed: {e}")
-else:
-    st.warning("Load projects from both sites to enable mapping.")
+    except Exception as final_error:
+        st.error(f"❌ Migration failed: {final_error}")
 
 # Footer
 st.markdown("""
