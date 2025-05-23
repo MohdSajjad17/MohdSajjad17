@@ -129,4 +129,3 @@ def embed_credentials(server, files_and_items, is_workbook=True):
         if is_workbook:
             server.workbooks.populate
 ::contentReference[oaicite:0]{index=0}
- 
