@@ -63,7 +63,7 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
         # Get permissions from source workbook
         src_permissions, _ = src_server.permissions.get(src_wb)
         
-        # Clear existing permissions on destination workbook before applying new ones (optional)
+        # Clear existing permissions on destination workbook before applying new ones
         dest_permissions, _ = dest_server.permissions.get(dest_wb)
         for perm in dest_permissions:
             dest_server.permissions.delete(dest_wb, perm)
@@ -98,7 +98,7 @@ def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, p
 with st.form("migration_form"):
     st.subheader("🔐 Source Tableau")
     src_url = st.text_input("Source Server URL")
-    src_site = st.text_input("Source Site Content URL")
+    src_site = st.text_input("Source Site Content URL (leave blank for default site)")
     src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
@@ -111,7 +111,7 @@ with st.form("migration_form"):
 
     st.subheader("🔐 Destination Tableau")
     dest_url = st.text_input("Destination Server URL")
-    dest_site = st.text_input("Destination Site Content URL")
+    dest_site = st.text_input("Destination Site Content URL (leave blank for default site)")
     dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
@@ -137,29 +137,36 @@ if submitted:
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Step 2: Connect to Source
+        # Step 2: Connect to Source and sign in
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
+
         src_proj_obj = next((p for p in src_server.projects.get()[0] if p.name == source_proj), None)
         if not src_proj_obj:
             st.error(f"❌ Source project '{source_proj}' not found.")
+            src_server.auth.sign_out()
             st.stop()
+
         files_and_wbs = download_workbooks(src_server, src_proj_obj.id, source_proj)
         if not files_and_wbs:
             st.warning("⚠️ No workbooks downloaded.")
+            src_server.auth.sign_out()
             st.stop()
 
-        # Step 3: Connect to Destination
+        # Step 3: Connect to Destination and sign in
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
+
         dest_proj_obj = next((p for p in dest_server.projects.get()[0] if p.name == dest_proj), None)
         if not dest_proj_obj:
             st.error(f"❌ Destination project '{dest_proj}' not found.")
+            src_server.auth.sign_out()
+            dest_server.auth.sign_out()
             st.stop()
 
-        # Step 4: Publish and migrate permissions
+        # Step 4: Publish workbooks & migrate permissions
         publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
 
         # Step 5: Sign out
