@@ -23,9 +23,9 @@ def create_local_dirs(project_name):
     os.makedirs(dest, exist_ok=True)
     return src, dest
 
-def get_local_path(type_: str, project_name: str, workbook_name: str) -> str:
+def get_local_path(type_: str, project_name: str, content_name: str, ext=".twbx") -> str:
     path = os.path.join(os.getcwd(), "tableau_migration", type_, sanitize(project_name))
-    return os.path.join(path, f"{sanitize(workbook_name)}.twbx")
+    return os.path.join(path, f"{sanitize(content_name)}{ext}")
 
 def get_auth(method, token_name, token_value, username, password, site):
     if method == "PAT":
@@ -36,35 +36,31 @@ def get_auth(method, token_name, token_value, username, password, site):
 def get_server(url):
     return TSC.Server(url, use_server_version=True)
 
-def download_workbooks(server, project_id, project_name):
-    workbooks, _ = server.workbooks.get()
-    selected = [wb for wb in workbooks if wb.project_id == project_id]
-    files = []
-    for wb in selected:
-        path = get_local_path("source", project_name, wb.name)
-        st.info(f"⬇️ Downloading: {wb.name}")
-        try:
-            file_path = server.workbooks.download(wb.id, filepath=path)
-            if os.path.exists(file_path):
-                files.append((wb, file_path))
-                st.success(f"✅ Downloaded: {wb.name}")
-            else:
-                st.error(f"❌ File not saved correctly: {wb.name}")
-        except Exception as e:
-            st.error(f"❌ Download failed for {wb.name}: {e}")
-    return files
-
-def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
+def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type="workbook"):
     try:
-        src_server.workbooks.populate_permissions(src_wb)
-        dest_server.workbooks.populate_permissions(dest_wb)
+        # Populate permissions depending on item type
+        if item_type == "workbook":
+            src_server.workbooks.populate_permissions(src_item)
+            dest_server.workbooks.populate_permissions(dest_item)
+            dest_perms_obj = dest_server.workbooks
+        elif item_type == "datasource":
+            src_server.datasources.populate_permissions(src_item)
+            dest_server.datasources.populate_permissions(dest_item)
+            dest_perms_obj = dest_server.datasources
+        elif item_type == "flow":
+            src_server.flows.populate_permissions(src_item)
+            dest_server.flows.populate_permissions(dest_item)
+            dest_perms_obj = dest_server.flows
+        else:
+            st.warning(f"⚠️ Permissions migration not implemented for type: {item_type}")
+            return
 
-        src_perms = src_wb.permissions
-        dest_perms = dest_wb.permissions
+        src_perms = src_item.permissions
+        dest_perms = dest_item.permissions
 
         # Clear existing destination permissions
         for perm in dest_perms:
-            dest_server.workbooks._permissions.delete(dest_wb, perm)
+            dest_perms_obj._permissions.delete(dest_item, perm)
 
         src_users, _ = src_server.users.get()
         src_groups, _ = src_server.groups.get()
@@ -98,7 +94,7 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
 
             if dest_grantee:
                 new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
-                dest_server.workbooks.update_permissions(dest_wb, [new_perm])
+                dest_perms_obj.update_permissions(dest_item, [new_perm])
             else:
                 st.warning(f"⚠️ Skipped permission for unknown grantee with ID: {grantee_ref.id}")
 
@@ -106,21 +102,97 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
             st.info("ℹ️ Skipped the following missing users/groups:")
             st.write(list(set(missing_grantees)))
 
-        st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
+        st.success(f"🔑 Permissions migrated for {item_type}: {src_item.name}")
 
     except Exception as e:
-        st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
+        st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {e}")
+
+def download_workbooks(server, project_id, project_name):
+    workbooks, _ = server.workbooks.get()
+    selected = [wb for wb in workbooks if wb.project_id == project_id]
+    files = []
+    for wb in selected:
+        path = get_local_path("source", project_name, wb.name, ext=".twbx")
+        st.info(f"⬇️ Downloading workbook: {wb.name}")
+        try:
+            file_path = server.workbooks.download(wb.id, filepath=path)
+            if os.path.exists(file_path):
+                files.append((wb, file_path))
+                st.success(f"✅ Downloaded workbook: {wb.name}")
+            else:
+                st.error(f"❌ File not saved correctly: {wb.name}")
+        except Exception as e:
+            st.error(f"❌ Download failed for workbook {wb.name}: {e}")
+    return files
 
 def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
     for wb, path in files_and_wbs:
-        st.info(f"⬆️ Publishing: {wb.name}")
+        st.info(f"⬆️ Publishing workbook: {wb.name}")
         try:
             new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
             published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.Overwrite)
-            st.success(f"✅ Published: {wb.name}")
-            migrate_permissions(src_server, wb, dest_server, published_wb)
+            st.success(f"✅ Published workbook: {wb.name}")
+            migrate_permissions(src_server, wb, dest_server, published_wb, item_type="workbook")
         except Exception as e:
-            st.error(f"❌ Failed to publish {wb.name}: {e}")
+            st.error(f"❌ Failed to publish workbook {wb.name}: {e}")
+
+def download_datasources(server, project_id, project_name):
+    datasources, _ = server.datasources.get()
+    selected = [ds for ds in datasources if ds.project_id == project_id]
+    files = []
+    for ds in selected:
+        path = get_local_path("source", project_name, ds.name, ext=".tdsx")
+        st.info(f"⬇️ Downloading datasource: {ds.name}")
+        try:
+            file_path = server.datasources.download(ds.id, filepath=path)
+            if os.path.exists(file_path):
+                files.append((ds, file_path))
+                st.success(f"✅ Downloaded datasource: {ds.name}")
+            else:
+                st.error(f"❌ File not saved correctly: {ds.name}")
+        except Exception as e:
+            st.error(f"❌ Download failed for datasource {ds.name}: {e}")
+    return files
+
+def publish_datasources(dest_server, files_and_ds, dest_project_id):
+    for ds, path in files_and_ds:
+        st.info(f"⬆️ Publishing datasource: {ds.name}")
+        try:
+            new_ds = TSC.DatasourceItem(project_id=dest_project_id, name=ds.name)
+            published_ds = dest_server.datasources.publish(new_ds, path, mode=TSC.Server.PublishMode.Overwrite)
+            st.success(f"✅ Published datasource: {ds.name}")
+            migrate_permissions(None, None, dest_server, published_ds, item_type="datasource")  # Src permissions unlikely for datasources, adjust if needed
+        except Exception as e:
+            st.error(f"❌ Failed to publish datasource {ds.name}: {e}")
+
+def download_flows(server, project_id, project_name):
+    flows, _ = server.flows.get()
+    selected = [flow for flow in flows if flow.project_id == project_id]
+    files = []
+    for flow in selected:
+        path = get_local_path("source", project_name, flow.name, ext=".tfl")
+        st.info(f"⬇️ Downloading flow: {flow.name}")
+        try:
+            file_path = server.flows.download(flow.id, filepath=path)
+            if os.path.exists(file_path):
+                files.append((flow, file_path))
+                st.success(f"✅ Downloaded flow: {flow.name}")
+            else:
+                st.error(f"❌ File not saved correctly: {flow.name}")
+        except Exception as e:
+            st.error(f"❌ Download failed for flow {flow.name}: {e}")
+    return files
+
+def publish_flows(dest_server, files_and_flows, dest_project_id):
+    for flow, path in files_and_flows:
+        st.info(f"⬆️ Publishing flow: {flow.name}")
+        try:
+            new_flow = TSC.FlowItem(project_id=dest_project_id, name=flow.name)
+            published_flow = dest_server.flows.publish(new_flow, path, mode=TSC.Server.PublishMode.Overwrite)
+            st.success(f"✅ Published flow: {flow.name}")
+            migrate_permissions(None, None, dest_server, published_flow, item_type="flow")  # Src permissions unlikely for flows, adjust if needed
+        except Exception as e:
+            st.error(f"❌ Failed to publish flow {flow.name}: {e}")
 
 def get_or_create_project(server, project_name):
     projects, _ = server.projects.get()
@@ -167,6 +239,13 @@ with st.form("migration_form"):
     source_proj = st.text_input("Source Project Name")
     dest_proj = st.text_input("Destination Project Name")
 
+    st.subheader("📦 Content Types to Migrate")
+    content_types = st.multiselect(
+        "Select content types to migrate",
+        ["Workbooks", "Datasources", "Flows"],
+        default=["Workbooks"]
+    )
+
     submitted = st.form_submit_button("🚀 Start Migration")
 
 # ----------------------------
@@ -187,9 +266,13 @@ if submitted:
             src_server.auth.sign_out()
             st.stop()
 
-        files_and_wbs = download_workbooks(src_server, src_proj_obj.id, source_proj)
-        if not files_and_wbs:
-            st.warning("⚠️ No workbooks downloaded.")
+        # Download selected content types
+        workbooks_files = download_workbooks(src_server, src_proj_obj.id, source_proj) if "Workbooks" in content_types else []
+        datasources_files = download_datasources(src_server, src_proj_obj.id, source_proj) if "Datasources" in content_types else []
+        flows_files = download_flows(src_server, src_proj_obj.id, source_proj) if "Flows" in content_types else []
+
+        if not any([workbooks_files, datasources_files, flows_files]):
+            st.warning("⚠️ No content downloaded.")
             src_server.auth.sign_out()
             st.stop()
 
@@ -200,7 +283,13 @@ if submitted:
         # Create destination project if not present
         dest_proj_obj = get_or_create_project(dest_server, dest_proj)
 
-        publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+        # Publish selected content types
+        if workbooks_files:
+            publish_workbooks(src_server, dest_server, workbooks_files, dest_proj_obj.id, dest_proj)
+        if datasources_files:
+            publish_datasources(dest_server, datasources_files, dest_proj_obj.id)
+        if flows_files:
+            publish_flows(dest_server, flows_files, dest_proj_obj.id)
 
         src_server.auth.sign_out()
         dest_server.auth.sign_out()
