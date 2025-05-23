@@ -148,6 +148,9 @@ def download_data_sources(server, project_id, project_name):
             else:
                 st.error(f"❌ File not saved correctly: {ds.name}")
         except Exception as e:
-            st.error(f"❌ Download failed for {ds.name}: {e
+            st.error(f"❌ Download failed for {ds.name}: {e}")
+    return files
+
+def publish_data_sources(src_server, dest_server, files_and_dss
 ::contentReference[oaicite:0]{index=0}
  
