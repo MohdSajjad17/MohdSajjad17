@@ -10,7 +10,7 @@ st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
     </style>
-    <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
+    <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
 # ----------------------------
@@ -48,7 +48,7 @@ def download_workbooks(server, project_id, project_name):
         path = get_local_path("source", project_name, wb.name)
         st.info(f"⬇️ Downloading: {wb.name}")
         try:
-            file_path = server.workbooks.download(wb.id, filepath=path)  # FIXED: removed no_extract
+            file_path = server.workbooks.download(wb.id, filepath=path)
             if os.path.exists(file_path):
                 files.append((wb, file_path))
                 st.success(f"✅ Downloaded: {wb.name}")
@@ -58,13 +58,37 @@ def download_workbooks(server, project_id, project_name):
             st.error(f"❌ Download failed for {wb.name}: {e}")
     return files
 
-def publish_workbooks(server, files_and_wbs, dest_project_id, project_name):
+def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
+    try:
+        # Get permissions from source workbook
+        src_permissions, _ = src_server.workbooks.get_permissions(src_wb.id)
+        
+        # Clear existing permissions on destination workbook before applying new ones (optional)
+        dest_permissions, _ = dest_server.workbooks.get_permissions(dest_wb.id)
+        for perm in dest_permissions:
+            dest_server.workbooks.delete_permission(dest_wb.id, perm.id)
+
+        # Apply source permissions to destination workbook
+        for perm in src_permissions:
+            new_perm = TSC.PermissionsRule(
+                grantee=perm.grantee,
+                capabilities=perm.capabilities
+            )
+            dest_server.workbooks.add_permission(dest_wb.id, new_perm)
+        st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
+    except Exception as e:
+        st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
+
+def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
     for wb, path in files_and_wbs:
         st.info(f"⬆️ Publishing: {wb.name}")
         try:
             new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
-            server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
+            published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
             st.success(f"✅ Published: {wb.name}")
+
+            # Migrate permissions after publishing
+            migrate_permissions(src_server, wb, dest_server, published_wb)
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
 
@@ -122,8 +146,6 @@ if submitted:
             st.error(f"❌ Source project '{source_proj}' not found.")
             st.stop()
         files_and_wbs = download_workbooks(src_server, src_proj_obj.id, source_proj)
-        src_server.auth.sign_out()
-
         if not files_and_wbs:
             st.warning("⚠️ No workbooks downloaded.")
             st.stop()
@@ -137,8 +159,11 @@ if submitted:
             st.error(f"❌ Destination project '{dest_proj}' not found.")
             st.stop()
 
-        # Step 4: Publish
-        publish_workbooks(dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+        # Step 4: Publish and migrate permissions
+        publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+
+        # Step 5: Sign out
+        src_server.auth.sign_out()
         dest_server.auth.sign_out()
 
         st.success("🎉 Migration completed successfully!")
