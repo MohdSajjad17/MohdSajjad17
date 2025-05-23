@@ -3,6 +3,7 @@ import tableauserverclient as TSC
 import os
 import re
 
+# Page setup
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -12,10 +13,9 @@ st.markdown("""
     <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
-
-# ------------------------------
-# HELPERS
-# ------------------------------
+# ----------------------------
+# Helper functions
+# ----------------------------
 def sanitize(name):
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
@@ -48,7 +48,7 @@ def download_workbooks(server, project_id, project_name):
         path = get_local_path("source", project_name, wb.name)
         st.info(f"⬇️ Downloading: {wb.name}")
         try:
-            file_path = server.workbooks.download(wb.id, filepath=path, no_extract=True)
+            file_path = server.workbooks.download(wb.id, filepath=path)  # FIXED: removed no_extract
             if os.path.exists(file_path):
                 files.append((wb, file_path))
                 st.success(f"✅ Downloaded: {wb.name}")
@@ -68,14 +68,14 @@ def publish_workbooks(server, files_and_wbs, dest_project_id, project_name):
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
 
-# ------------------------------
-# STREAMLIT FORM
-# ------------------------------
+# ----------------------------
+# Streamlit UI Form
+# ----------------------------
 with st.form("migration_form"):
     st.subheader("🔐 Source Tableau")
     src_url = st.text_input("Source Server URL")
     src_site = st.text_input("Source Site Content URL")
-    src_auth_method = st.selectbox("Source Auth", ["PAT", "Username & Password"], key="src_auth")
+    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
         src_token_secret = st.text_input("Source PAT Secret", type="password")
@@ -88,7 +88,7 @@ with st.form("migration_form"):
     st.subheader("🔐 Destination Tableau")
     dest_url = st.text_input("Destination Server URL")
     dest_site = st.text_input("Destination Site Content URL")
-    dest_auth_method = st.selectbox("Destination Auth", ["PAT", "Username & Password"], key="dest_auth")
+    dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
         dest_token_secret = st.text_input("Destination PAT Secret", type="password")
@@ -98,22 +98,22 @@ with st.form("migration_form"):
         dest_password = st.text_input("Destination Password", type="password")
         dest_token_name = dest_token_secret = None
 
-    st.subheader("📁 Project Names (Manual Input)")
+    st.subheader("📁 Project Mapping")
     source_proj = st.text_input("Source Project Name")
     dest_proj = st.text_input("Destination Project Name")
 
     submitted = st.form_submit_button("🚀 Start Migration")
 
-# ------------------------------
-# MIGRATION LOGIC
-# ------------------------------
+# ----------------------------
+# Migration Logic
+# ----------------------------
 if submitted:
     try:
-        # Step 1: Create folders
+        # Step 1: Create folder structure
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Step 2: Sign in to source
+        # Step 2: Connect to Source
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
@@ -128,7 +128,7 @@ if submitted:
             st.warning("⚠️ No workbooks downloaded.")
             st.stop()
 
-        # Step 3: Sign in to destination
+        # Step 3: Connect to Destination
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
@@ -137,6 +137,7 @@ if submitted:
             st.error(f"❌ Destination project '{dest_proj}' not found.")
             st.stop()
 
+        # Step 4: Publish
         publish_workbooks(dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
         dest_server.auth.sign_out()
 
