@@ -9,7 +9,7 @@ st.markdown("""
     <style>
     .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
     </style>
-    <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
+    <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
 def sanitize(name):
