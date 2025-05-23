@@ -3,7 +3,7 @@ import tableauserverclient as TSC
 import os
 import re
 
-# Page setup
+# ---------------------------- Page Setup ----------------------------
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -13,9 +13,7 @@ st.markdown("""
     <div class="footer">Developed with ❤️ by <strong>Mohd Sajjad</strong></div>
 """, unsafe_allow_html=True)
 
-# ----------------------------
-# Helper functions
-# ----------------------------
+# ---------------------------- Helper Functions ----------------------------
 def sanitize(name):
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
@@ -59,49 +57,46 @@ def download_workbooks(server, project_id, project_name):
     return files
 
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
-    # Permissions can only be accessed after sign-in, so this function
-    # MUST be called after both servers are signed in
     try:
-        # Get permissions from source workbook
-        src_permissions, _ = src_server.permissions.get(src_wb)
+        src_server.workbooks.populate_permissions(src_wb)
+        dest_server.workbooks.populate_permissions(dest_wb)
 
-        # Clear existing permissions on destination workbook before applying new ones
-        dest_permissions, _ = dest_server.permissions.get(dest_wb)
+        src_permissions = src_server.workbooks._permissions.get(src_wb)
+        dest_permissions = dest_server.workbooks._permissions.get(dest_wb)
+
         for perm in dest_permissions:
-            dest_server.permissions.delete(dest_wb, perm)
+            dest_server.workbooks._permissions.delete(dest_wb, perm)
 
-        # Apply source permissions to destination workbook
         for perm in src_permissions:
             new_perm = TSC.PermissionsRule(
                 grantee=perm.grantee,
                 capabilities=perm.capabilities
             )
-            dest_server.permissions.add(dest_wb, new_perm)
+            dest_server.workbooks._permissions.add(dest_wb, new_perm)
+
         st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
     except Exception as e:
         st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
 
-def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
+def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id):
     for wb, path in files_and_wbs:
         st.info(f"⬆️ Publishing: {wb.name}")
         try:
             new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
-            published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.CreateNew)
+            published_wb = dest_server.workbooks.publish(
+                new_wb, path, mode=TSC.Server.PublishMode.Overwrite
+            )
             st.success(f"✅ Published: {wb.name}")
-
-            # Migrate permissions AFTER publishing and AFTER both servers are signed in
             migrate_permissions(src_server, wb, dest_server, published_wb)
         except Exception as e:
             st.error(f"❌ Failed to publish {wb.name}: {e}")
 
-# ----------------------------
-# Streamlit UI Form
-# ----------------------------
+# ---------------------------- Streamlit UI ----------------------------
 with st.form("migration_form"):
     st.subheader("🔐 Source Tableau")
     src_url = st.text_input("Source Server URL")
     src_site = st.text_input("Source Site Content URL (leave blank for default site)")
-    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
+    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"])
     if src_auth_method == "PAT":
         src_token_name = st.text_input("Source PAT Name")
         src_token_secret = st.text_input("Source PAT Secret", type="password")
@@ -114,7 +109,7 @@ with st.form("migration_form"):
     st.subheader("🔐 Destination Tableau")
     dest_url = st.text_input("Destination Server URL")
     dest_site = st.text_input("Destination Site Content URL (leave blank for default site)")
-    dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"], key="dest_auth")
+    dest_auth_method = st.selectbox("Destination Auth Method", ["PAT", "Username & Password"])
     if dest_auth_method == "PAT":
         dest_token_name = st.text_input("Destination PAT Name")
         dest_token_secret = st.text_input("Destination PAT Secret", type="password")
@@ -130,16 +125,13 @@ with st.form("migration_form"):
 
     submitted = st.form_submit_button("🚀 Start Migration")
 
-# ----------------------------
-# Migration Logic
-# ----------------------------
+# ---------------------------- Migration Logic ----------------------------
 if submitted:
     try:
-        # Step 1: Create folder structure
         src_dir, dest_dir = create_local_dirs(source_proj)
         st.success(f"📂 Local folders created:\n- {src_dir}\n- {dest_dir}")
 
-        # Step 2: Connect to Source and sign in BEFORE using permissions
+        # Connect to source Tableau server
         src_auth = get_auth(src_auth_method, src_token_name, src_token_secret, src_username, src_password, src_site)
         src_server = get_server(src_url)
         src_server.auth.sign_in(src_auth)
@@ -156,7 +148,7 @@ if submitted:
             src_server.auth.sign_out()
             st.stop()
 
-        # Step 3: Connect to Destination and sign in BEFORE using permissions
+        # Connect to destination Tableau server
         dest_auth = get_auth(dest_auth_method, dest_token_name, dest_token_secret, dest_username, dest_password, dest_site)
         dest_server = get_server(dest_url)
         dest_server.auth.sign_in(dest_auth)
@@ -168,10 +160,10 @@ if submitted:
             dest_server.auth.sign_out()
             st.stop()
 
-        # Step 4: Publish workbooks & migrate permissions
-        publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id, dest_proj)
+        # Publish and migrate
+        publish_workbooks(src_server, dest_server, files_and_wbs, dest_proj_obj.id)
 
-        # Step 5: Sign out after everything is done
+        # Sign out
         src_server.auth.sign_out()
         dest_server.auth.sign_out()
 
