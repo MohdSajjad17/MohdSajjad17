@@ -38,25 +38,30 @@ st.title("Tableau Migration Tool")
 tab1, tab2 = st.tabs(["Migration", "Export/Import"])
 
 with tab1:
-    st.subheader("🔁 Migrate Tableau Content")
-    src_url = st.text_input("Source Server URL")
-    src_site = st.text_input("Source Site Content URL", "")
-    src_token_name = st.text_input("Source PAT Name")
-    src_token = st.text_input("Source PAT Token", type="password")
-    src_auth = get_auth("PAT", src_token_name, src_token, None, None, src_site)
+    with st.form("migration_form"):
+        st.subheader("🔁 Migrate Tableau Content")
+        src_url = st.text_input("Source Server URL")
+        src_site = st.text_input("Source Site Content URL", "")
+        src_token_name = st.text_input("Source PAT Name")
+        src_token = st.text_input("Source PAT Token", type="password")
 
-    dest_url = st.text_input("Destination Server URL")
-    dest_site = st.text_input("Destination Site Content URL", "")
-    dest_token_name = st.text_input("Destination PAT Name")
-    dest_token = st.text_input("Destination PAT Token", type="password")
-    dest_auth = get_auth("PAT", dest_token_name, dest_token, None, None, dest_site)
+        dest_url = st.text_input("Destination Server URL")
+        dest_site = st.text_input("Destination Site Content URL", "")
+        dest_token_name = st.text_input("Destination PAT Name")
+        dest_token = st.text_input("Destination PAT Token", type="password")
 
-    project_name = st.text_input("Project Name for Migration")
+        project_name = st.text_input("Project Name for Migration")
 
-    if st.form_submit_button("Start Migration"):
+        submitted = st.form_submit_button("Start Migration")
+
+    if submitted:
         with st.spinner("🔁 Migrating..."):
+            src_auth = get_auth("PAT", src_token_name, src_token, None, None, src_site)
+            dest_auth = get_auth("PAT", dest_token_name, dest_token, None, None, dest_site)
+
             src_server = get_server(src_url)
             dest_server = get_server(dest_url)
+
             src_server.auth.sign_in(src_auth)
             dest_server.auth.sign_in(dest_auth)
 
