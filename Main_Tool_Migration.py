@@ -1,107 +1,89 @@
 import os
 import tableauserverclient as TSC
 import streamlit as st
-import pandas as pd
 
-# Function to handle authentication
-def get_auth(auth_type, token_name, token, username, password, site):
-    if auth_type == "PAT":
-        return TSC.PersonalAccessTokenAuth(token_name, token, site)
-    else:
-        return TSC.TableauAuth(username, password, site)
-
-# Function to get the server instance
-def get_server(url):
-    server = TSC.Server(url)
-    server.use_server_version()
-    return server
-
-# Function to download and publish content
-def download_publish_content(server, project_id, project_name, content_type, file_extension, downloader, publisher):
+def download_publish_content(server, project_id, project_name, content_type, file_extension, items_iterable, publisher):
     items = []
-    for item in downloader():
+    os.makedirs("downloads", exist_ok=True)
+    for item in items_iterable:
         item_file = f"{item.name}{file_extension}"
         item_filepath = os.path.join("downloads", item_file)
-        os.makedirs(os.path.dirname(item_filepath), exist_ok=True)
-        server.content.download(item.id, item_filepath)
+        
+        # Download based on content type
+        if content_type == "workbook":
+            server.workbooks.download(item.id, item_filepath)
+        elif content_type == "datasource":
+            server.datasources.download(item.id, item_filepath)
+        else:
+            st.warning(f"Unsupported content type: {content_type}")
+            continue
+        
         items.append((item, item_filepath))
     return items
 
-# Function to publish workbooks
-def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
-    for workbook, file_path in files_and_wbs:
-        dest_workbook = TSC.WorkbookItem(workbook.name, dest_project_id)
-        dest_server.workbooks.publish(dest_workbook, file_path, TSC.Server.PublishMode.Overwrite)
+def main():
+    st.title("Tableau Content Migration Tool")
 
-# Streamlit UI
-st.title("Tableau Migration Tool")
-tab1, tab2 = st.tabs(["Migration", "Export/Import"])
+    # Dummy login / server connection - Replace with your credentials and server URL
+    src_server_url = st.text_input("Source Tableau Server URL", "https://your-src-server")
+    src_username = st.text_input("Source Username")
+    src_password = st.text_input("Source Password", type="password")
 
-with tab1:
-    with st.form("migration_form"):
-        st.subheader("🔁 Migrate Tableau Content")
-        src_url = st.text_input("Source Server URL")
-        src_site = st.text_input("Source Site Content URL", "")
-        src_token_name = st.text_input("Source PAT Name")
-        src_token = st.text_input("Source PAT Token", type="password")
+    dest_server_url = st.text_input("Destination Tableau Server URL", "https://your-dest-server")
+    dest_username = st.text_input("Destination Username")
+    dest_password = st.text_input("Destination Password", type="password")
 
-        dest_url = st.text_input("Destination Server URL")
-        dest_site = st.text_input("Destination Site Content URL", "")
-        dest_token_name = st.text_input("Destination PAT Name")
-        dest_token = st.text_input("Destination PAT Token", type="password")
+    project_name = st.text_input("Project Name to Migrate", "Default")
 
-        project_name = st.text_input("Project Name for Migration")
+    if st.button("Start Migration"):
+        # Sign in to source server
+        src_auth = TSC.TableauAuth(src_username, src_password)
+        src_server = TSC.Server(src_server_url, use_server_version=True)
 
-        submitted = st.form_submit_button("Start Migration")
+        # Sign in to destination server
+        dest_auth = TSC.TableauAuth(dest_username, dest_password)
+        dest_server = TSC.Server(dest_server_url, use_server_version=True)
 
-    if submitted:
-        with st.spinner("🔁 Migrating..."):
-            src_auth = get_auth("PAT", src_token_name, src_token, None, None, src_site)
-            dest_auth = get_auth("PAT", dest_token_name, dest_token, None, None, dest_site)
+        with src_server.auth.sign_in(src_auth):
+            with dest_server.auth.sign_in(dest_auth):
+                # Get project ID by name from source server
+                all_projects, _ = src_server.projects.get()
+                project_id = None
+                for project in all_projects:
+                    if project.name == project_name:
+                        project_id = project.id
+                        break
+                if not project_id:
+                    st.error(f"Project '{project_name}' not found on source server.")
+                    return
+                
+                # Use Pager to get all workbooks in the source server
+                all_workbooks = TSC.Pager(src_server.workbooks)
+                
+                st.info(f"Downloading workbooks from project '{project_name}'...")
 
-            src_server = get_server(src_url)
-            dest_server = get_server(dest_url)
+                # Filter workbooks belonging to the project
+                workbooks_in_project = [wb for wb in all_workbooks if wb.project_id == project_id]
 
-            src_server.auth.sign_in(src_auth)
-            dest_server.auth.sign_in(dest_auth)
+                # Download workbooks
+                files_and_wbs = []
+                for wb in workbooks_in_project:
+                    filename = f"{wb.name}.twbx"
+                    filepath = os.path.join("downloads", filename)
+                    os.makedirs("downloads", exist_ok=True)
+                    src_server.workbooks.download(wb.id, filepath)
+                    files_and_wbs.append((wb, filepath))
+                    st.write(f"Downloaded: {wb.name}")
 
-            # Download and publish workbooks
-            files_and_wbs = download_publish_content(
-                src_server, None, project_name, "workbook", ".twbx",
-                lambda: TSC.Pager(src_server.workbooks), dest_server.workbooks.publish)
-            publish_workbooks(src_server, dest_server, files_and_wbs, None, project_name)
+                st.success(f"Downloaded {len(files_and_wbs)} workbooks.")
 
-            src_server.auth.sign_out()
-            dest_server.auth.sign_out()
-            st.success("✅ Migration completed.")
+                # Publish to destination server
+                for wb, filepath in files_and_wbs:
+                    new_wb = TSC.WorkbookItem(project_id)
+                    new_wb = dest_server.workbooks.publish(new_wb, filepath, mode=TSC.Server.PublishMode.Overwrite)
+                    st.write(f"Published workbook: {new_wb.name}")
 
-with tab2:
-    st.subheader("📤 Export / Import Users and Groups")
-    server_url = st.text_input("Server URL")
-    site = st.text_input("Site Content URL", "")
-    auth_method = st.selectbox("Authentication Method", ["PAT", "Username & Password"])
-    if auth_method == "PAT":
-        token_name = st.text_input("PAT Name")
-        token = st.text_input("PAT Token", type="password")
-        auth = get_auth("PAT", token_name, token, None, None, site)
-    else:
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        auth = get_auth("Password", None, None, username, password, site)
+                st.success("Migration completed!")
 
-    if st.button("Export Users and Groups"):
-        server = get_server(server_url)
-        server.auth.sign_in(auth)
-        users = server.users.get()[0]
-        groups = server.groups.get()[0]
-        user_data = [(u.name, u.site_role) for u in users]
-        group_data = [(g.name,) for g in groups]
-        server.auth.sign_out()
-
-        to_csv_download(user_data, ["name", "site_role"], "users.csv", "Download Users CSV")
-        to_csv_download(group_data, ["group_name"], "groups.csv", "Download Groups CSV")
-
-    import_type = st.selectbox("Import Type", ["Users", "Groups"])
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    if st.button("Import"):
-        run_import(import_type, uploaded_file, auth)
+if __name__ == "__main__":
+    main()
