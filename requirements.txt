@@ -1,6 +1,5 @@
 streamlit>=1.32.0
 tableauserverclient>=0.26
 requests>=2.31.0
-streamlit
 python-dotenv
-tableau-migration-sdk
+tableau_migration
