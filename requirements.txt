@@ -4,3 +4,4 @@ requests>=2.31.0
 python-dotenv
 tableau_migration
 pandas>=1.5.0
+tzlocal>=4.2
