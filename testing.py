@@ -3,7 +3,7 @@ import tableauserverclient as TSC
 import os
 import re
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 
 # Set up Streamlit page configuration
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
@@ -22,7 +22,9 @@ def create_local_dirs(project_name):
     dirs = {
         'workbooks': os.path.join(base, "workbooks", sanitize(project_name)),
         'datasources': os.path.join(base, "datasources", sanitize(project_name)),
-        'views': os.path.join(base, "views", sanitize(project_name))
+        'views': os.path.join(base, "views", sanitize(project_name)),
+        'users': os.path.join(base, "users"),
+        'groups': os.path.join(base, "groups")
     }
     for dir_path in dirs.values():
         os.makedirs(dir_path, exist_ok=True)
@@ -40,6 +42,22 @@ def get_server(url):
     server = TSC.Server(url, use_server_version=True)
     server.add_http_options({'verify': False})  # Disable SSL verification if needed
     return server
+
+def get_or_create_project(server, project_name, parent_project_id=None):
+    """Get or create a project on the destination server."""
+    all_projects, _ = server.projects.get()
+    project = next((p for p in all_projects if p.name == project_name), None)
+    
+    if not project:
+        new_project = TSC.ProjectItem(name=project_name, content_permissions="ManagedByOwner")
+        if parent_project_id:
+            new_project.parent_id = parent_project_id
+        project = server.projects.create(new_project)
+        st.success(f"✅ Created new project: {project_name}")
+    else:
+        st.info(f"ℹ️ Using existing project: {project_name}")
+    
+    return project
 
 # --------------------------
 # Content Download Functions
@@ -79,21 +97,227 @@ def download_content(server, project_id, project_name, content_type):
                             st.error(f"❌ Datasource not saved: {item.name}")
                     except Exception as e:
                         st.error(f"❌ Failed to download datasource {item.name}: {e}")
+        
+        elif content_type == "custom_view":
+            items, _ = server.views.get()
+            for item in items:
+                if hasattr(item, 'workbook') and item.workbook.project_id == project_id:
+                    path = os.path.join(dirs['views'], f"{sanitize(item.name)}.tvc")
+                    try:
+                        # Custom views need to be downloaded with their parent workbook
+                        # We'll store metadata about the view for later recreation
+                        view_data = {
+                            'name': item.name,
+                            'workbook_name': item.workbook.name,
+                            'owner_name': item.owner.name if hasattr(item, 'owner') else None,
+                            'view_data': item._view_data
+                        }
+                        downloaded_files.append((view_data, path, 'custom_view'))
+                        st.success(f"✅ Captured custom view: {item.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to capture custom view {item.name}: {e}")
     except Exception as e:
         st.error(f"❌ Error getting {content_type} list: {e}")
     
     return downloaded_files
 
 # --------------------------
+# User and Group Migration
+# --------------------------
+def migrate_users_and_groups(src_server, dest_server, migrate_users=True, migrate_groups=True):
+    """Migrate users and groups between servers."""
+    if not (migrate_users or migrate_groups):
+        return
+    
+    st.subheader("👥 Migrating Users and Groups")
+    
+    # Get source and destination users/groups
+    src_users, _ = src_server.users.get()
+    src_groups, _ = src_server.groups.get()
+    dest_users, _ = dest_server.users.get()
+    dest_groups, _ = dest_server.groups.get()
+    
+    # Create mappings
+    src_user_map = {u.name.lower(): u for u in src_users}
+    src_group_map = {g.name.lower(): g for g in src_groups}
+    dest_user_map = {u.name.lower(): u for u in dest_users}
+    dest_group_map = {g.name.lower(): g for g in dest_groups}
+    
+    # Migrate groups first
+    if migrate_groups:
+        st.info("🔄 Migrating groups...")
+        for group in src_groups:
+            if group.name.lower() not in dest_group_map:
+                try:
+                    new_group = TSC.GroupItem(group.name)
+                    created_group = dest_server.groups.create(new_group)
+                    dest_group_map[group.name.lower()] = created_group
+                    st.success(f"✅ Created group: {group.name}")
+                except Exception as e:
+                    st.error(f"❌ Failed to create group {group.name}: {e}")
+    
+    # Migrate users
+    if migrate_users:
+        st.info("🔄 Migrating users...")
+        for user in src_users:
+            if user.name.lower() not in dest_user_map:
+                try:
+                    # Skip system users
+                    if user.name.lower() in ['system', 'guest', 'tableau']:
+                        continue
+                        
+                    new_user = TSC.UserItem(
+                        name=user.name,
+                        fullname=user.fullname,
+                        email=user.email,
+                        site_role=user.site_role
+                    )
+                    created_user = dest_server.users.add(new_user)
+                    dest_user_map[user.name.lower()] = created_user
+                    st.success(f"✅ Created user: {user.name}")
+                    
+                    # Add user to groups
+                    if migrate_groups:
+                        user_groups, _ = src_server.groups.populate_users(group)
+                        for group in user_groups:
+                            if group.name.lower() in dest_group_map:
+                                dest_server.groups.add_user(
+                                    dest_group_map[group.name.lower()].id, 
+                                    created_user.id
+                                )
+                                st.info(f"👥 Added user {user.name} to group {group.name}")
+                except Exception as e:
+                    st.error(f"❌ Failed to create user {user.name}: {e}")
+    
+    return dest_user_map, dest_group_map
+
+# --------------------------
+# Subscription Migration
+# --------------------------
+def migrate_subscriptions(src_server, dest_server, src_item, dest_item, item_type, user_map):
+    """Migrate subscriptions for workbooks or views."""
+    try:
+        if item_type == 'workbook':
+            subscriptions, _ = src_server.subscriptions.get_by_workbook(src_item.id)
+        elif item_type == 'view':
+            subscriptions, _ = src_server.subscriptions.get_by_view(src_item.id)
+        else:
+            return
+        
+        if not subscriptions:
+            st.info(f"ℹ️ No subscriptions found for {item_type} {src_item.name}")
+            return
+        
+        st.info(f"📨 Migrating subscriptions for {item_type} {src_item.name}")
+        
+        for sub in subscriptions:
+            try:
+                # Map the user
+                if sub.user.name.lower() in user_map:
+                    dest_user = user_map[sub.user.name.lower()]
+                else:
+                    st.warning(f"⚠️ Skipping subscription - user not found: {sub.user.name}")
+                    continue
+                
+                # Create new subscription
+                new_sub = TSC.SubscriptionItem(
+                    subject=sub.subject,
+                    schedule_id=sub.schedule_id,  # Note: schedule must exist on destination
+                    user=dest_user,
+                    content=dest_item
+                )
+                
+                # Set recipient list
+                recipients = []
+                for recipient in sub.recipients:
+                    if recipient.name.lower() in user_map:
+                        recipients.append(user_map[recipient.name.lower()])
+                    else:
+                        st.warning(f"⚠️ Skipping recipient {recipient.name} - user not found")
+                
+                if recipients:
+                    new_sub.recipients = recipients
+                    created_sub = dest_server.subscriptions.create(new_sub)
+                    st.success(f"✅ Created subscription for {dest_user.name}")
+                else:
+                    st.warning("⚠️ No valid recipients found for subscription")
+                
+            except Exception as e:
+                st.error(f"❌ Failed to migrate subscription: {e}")
+                
+    except Exception as e:
+        st.error(f"❌ Failed to get subscriptions for {item_type} {src_item.name}: {e}")
+
+# --------------------------
+# Custom View Migration
+# --------------------------
+def migrate_custom_views(src_server, dest_server, src_project_id, dest_project_id, user_map):
+    """Migrate custom views (personalized dashboard views)."""
+    st.subheader("👀 Migrating Custom Views")
+    
+    try:
+        # Get all views from source
+        src_views, _ = src_server.views.get()
+        src_views = [v for v in src_views if hasattr(v, 'workbook') and v.workbook.project_id == src_project_id]
+        
+        if not src_views:
+            st.info("ℹ️ No custom views found in source project")
+            return
+        
+        # Get all workbooks in destination project
+        dest_workbooks, _ = dest_server.workbooks.get()
+        dest_workbooks = [w for w in dest_workbooks if w.project_id == dest_project_id]
+        dest_wb_map = {w.name.lower(): w for w in dest_workbooks}
+        
+        migrated_count = 0
+        
+        for view in src_views:
+            try:
+                # Find matching workbook in destination
+                wb_name = view.workbook.name.lower()
+                if wb_name not in dest_wb_map:
+                    st.warning(f"⚠️ Skipping view '{view.name}' - workbook not found: {view.workbook.name}")
+                    continue
+                
+                dest_wb = dest_wb_map[wb_name]
+                
+                # Get the view details
+                view_details = src_server.views.get_by_id(view.id)
+                src_server.views.populate_preview_image(view_details)
+                
+                # Create the view on destination
+                new_view = TSC.ViewItem()
+                new_view._preview_image = view_details._preview_image
+                new_view._preview_image_content_type = view_details._preview_image_content_type
+                
+                # Set owner if available
+                if hasattr(view, 'owner') and view.owner.name.lower() in user_map:
+                    new_view.owner_id = user_map[view.owner.name.lower()].id
+                
+                created_view = dest_server.views.update(dest_wb.id, new_view)
+                migrated_count += 1
+                st.success(f"✅ Migrated view: {view.name}")
+                
+            except Exception as e:
+                st.error(f"❌ Failed to migrate view {view.name}: {e}")
+        
+        st.info(f"ℹ️ Migrated {migrated_count}/{len(src_views)} custom views")
+        
+    except Exception as e:
+        st.error(f"❌ Failed to migrate custom views: {e}")
+
+# --------------------------
 # Publish Functions with Sequencing
 # --------------------------
-def publish_datasources_first(src_server, dest_server, downloaded_items, dest_project_id, migrate_schedules):
+def publish_datasources_first(src_server, dest_server, downloaded_items, dest_project_id, migrate_schedules, user_map):
     """Publish datasources first, then workbooks, with proper sequencing."""
-    # Separate datasources and workbooks
+    # Separate content types
     datasources = [item for item in downloaded_items if item[2] == 'datasource']
     workbooks = [item for item in downloaded_items if item[2] == 'workbook']
+    custom_views = [item for item in downloaded_items if item[2] == 'custom_view']
     
     published_ds = {}
+    published_wb = {}
     
     # Publish all datasources first
     st.subheader("📊 Publishing Data Sources")
@@ -107,8 +331,11 @@ def publish_datasources_first(src_server, dest_server, downloaded_items, dest_pr
             )
             st.success(f"✅ Published datasource: {ds_item.name}")
             
+            # Store published datasource reference
+            published_ds[ds_item.name] = published_ds.id
+            
             # Migrate permissions
-            migrate_permissions(src_server, ds_item, dest_server, published_ds, 'datasource')
+            migrate_permissions(src_server, ds_item, dest_server, published_ds, 'datasource', user_map)
             
             # Migrate schedules if enabled
             if migrate_schedules:
@@ -121,8 +348,9 @@ def publish_datasources_first(src_server, dest_server, downloaded_items, dest_pr
                     dest_project_id
                 )
             
-            # Store published datasource reference
-            published_ds[ds_item.name] = published_ds.id
+            # Migrate subscriptions
+            migrate_subscriptions(src_server, dest_server, ds_item, published_ds, 'datasource', user_map)
+            
             time.sleep(1)  # Small delay to avoid rate limiting
             
         except Exception as e:
@@ -141,8 +369,11 @@ def publish_datasources_first(src_server, dest_server, downloaded_items, dest_pr
             )
             st.success(f"✅ Published workbook: {wb_item.name}")
             
+            # Store published workbook reference
+            published_wb[wb_item.name] = published_wb
+            
             # Migrate permissions
-            migrate_permissions(src_server, wb_item, dest_server, published_wb, 'workbook')
+            migrate_permissions(src_server, wb_item, dest_server, published_wb, 'workbook', user_map)
             
             # Migrate schedules if enabled
             if migrate_schedules:
@@ -155,12 +386,19 @@ def publish_datasources_first(src_server, dest_server, downloaded_items, dest_pr
                     dest_project_id
                 )
             
+            # Migrate subscriptions
+            migrate_subscriptions(src_server, dest_server, wb_item, published_wb, 'workbook', user_map)
+            
             time.sleep(1)  # Small delay to avoid rate limiting
             
         except Exception as e:
             st.error(f"❌ Failed to publish workbook {wb_item.name}: {e}")
             if "Datasource not found" in str(e):
                 st.warning("This workbook may reference datasources that weren't migrated successfully")
+    
+    # Migrate custom views after workbooks are published
+    if custom_views:
+        migrate_custom_views(src_server, dest_server, wb_item.project_id, dest_project_id, user_map)
 
 # --------------------------
 # Schedule Migration Functions
@@ -250,7 +488,7 @@ def migrate_extract_schedules(src_server, dest_server, src_item, dest_item, item
 # --------------------------
 # Permission Migration
 # --------------------------
-def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type):
+def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type, user_map):
     """Migrate permissions for either workbook or datasource."""
     try:
         if item_type == 'workbook':
@@ -268,15 +506,11 @@ def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type)
         for perm in dest_item.permissions:
             permission_manager._permissions.delete(dest_item, perm)
         
-        # Get user/group mappings
-        src_users, _ = src_server.users.get()
+        # Get group mappings
         src_groups, _ = src_server.groups.get()
-        dest_users, _ = dest_server.users.get()
         dest_groups, _ = dest_server.groups.get()
         
-        src_user_map = {u.name.lower(): u for u in src_users}  # Case insensitive matching
         src_group_map = {g.name.lower(): g for g in src_groups}
-        dest_user_map = {u.name.lower(): u for u in dest_users}
         dest_group_map = {g.name.lower(): g for g in dest_groups}
         
         missing_grantees = []
@@ -286,9 +520,8 @@ def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type)
             dest_grantee = None
             
             if grantee_ref.tag_name == 'user':
-                src_user = src_user_map.get(grantee_ref.name.lower() if hasattr(grantee_ref, 'name') else '')
-                if src_user and src_user.name.lower() in dest_user_map:
-                    dest_grantee = dest_user_map[src_user.name.lower()]
+                if grantee_ref.name.lower() in user_map:
+                    dest_grantee = user_map[grantee_ref.name.lower()]
                 else:
                     missing_grantees.append(grantee_ref.name if hasattr(grantee_ref, 'name') else grantee_ref.id)
             
@@ -353,9 +586,15 @@ def main():
         src_project_name = st.text_input("Source Project Name", help="Name of the project to migrate from")
         dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to")
         
+        # Toggle for user/group migration
+        st.subheader("👥 User and Group Migration")
+        migrate_users_groups = st.checkbox("Migrate Users and Groups", value=True)
+        
+        # Content type selection
+        st.subheader("📦 Content to Migrate")
         content_types = st.multiselect(
             "Select content types to migrate",
-            ["Workbooks", "Data Sources", "Custom Views"],
+            ["Workbooks", "Data Sources", "Custom Views", "Subscriptions"],
             default=["Workbooks", "Data Sources"]
         )
         
@@ -415,6 +654,11 @@ def main():
                 with dest_server.auth.sign_in(dest_auth):
                     st.success("🔓 Successfully connected to destination server")
                     
+                    # Migrate users and groups first if enabled
+                    user_map = {}
+                    if migrate_users_groups:
+                        user_map, _ = migrate_users_and_groups(src_server, dest_server)
+                    
                     # Get or create destination project
                     dest_project = get_or_create_project(dest_server, dest_project_name)
                     
@@ -432,6 +676,11 @@ def main():
                         wb_items = download_content(src_server, src_project.id, src_project_name, "workbook")
                         downloaded_items.extend(wb_items)
                     
+                    if "Custom Views" in content_types:
+                        st.subheader("📥 Capturing Custom Views")
+                        view_items = download_content(src_server, src_project.id, src_project_name, "custom_view")
+                        downloaded_items.extend(view_items)
+                    
                     # Publish content in proper sequence (datasources first)
                     if downloaded_items:
                         publish_datasources_first(
@@ -439,7 +688,8 @@ def main():
                             dest_server,
                             downloaded_items,
                             dest_project.id,
-                            migrate_schedules
+                            migrate_schedules,
+                            user_map
                         )
                     
                     st.balloons()
