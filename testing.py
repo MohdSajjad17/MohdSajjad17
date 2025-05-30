@@ -335,100 +335,6 @@ def migrate_custom_views(src_server, dest_server, src_project_id, dest_project_i
         st.error(f"❌ Failed to migrate custom views: {e}")
 
 # --------------------------
-# Publish Functions with Sequencing
-# --------------------------
-def publish_datasources_first(src_server, dest_server, downloaded_items, dest_project_id, migrate_schedules, user_map):
-    """Publish datasources first, then workbooks, with proper sequencing."""
-    # Separate content types
-    datasources = [item for item in downloaded_items if item[2] == 'datasource']
-    workbooks = [item for item in downloaded_items if item[2] == 'workbook']
-    custom_views = [item for item in downloaded_items if item[2] == 'custom_view']
-    
-    published_ds = {}
-    published_wb = {}
-    
-    # Publish all datasources first
-    st.subheader("📊 Publishing Data Sources")
-    for ds_item, path, _ in datasources:
-        try:
-            new_ds = TSC.DatasourceItem(name=ds_item.name, project_id=dest_project_id)
-            published_ds = dest_server.datasources.publish(
-                new_ds, 
-                path, 
-                mode=TSC.Server.PublishMode.Overwrite
-            )
-            st.success(f"✅ Published datasource: {ds_item.name}")
-            
-            # Store published datasource reference
-            published_ds[ds_item.name] = published_ds.id
-            
-            # Migrate permissions
-            migrate_permissions(src_server, ds_item, dest_server, published_ds, 'datasource', user_map)
-            
-            # Migrate schedules if enabled
-            if migrate_schedules:
-                migrate_extract_schedules(
-                    src_server, 
-                    dest_server, 
-                    ds_item, 
-                    published_ds, 
-                    'datasource', 
-                    dest_project_id
-                )
-            
-            # Migrate subscriptions
-            migrate_subscriptions(src_server, dest_server, ds_item, published_ds, 'datasource', user_map)
-            
-            time.sleep(1)  # Small delay to avoid rate limiting
-            
-        except Exception as e:
-            st.error(f"❌ Failed to publish datasource {ds_item.name}: {e}")
-    
-    # Publish workbooks after datasources are available
-    st.subheader("📚 Publishing Workbooks")
-    for wb_item, path, _ in workbooks:
-        try:
-            new_wb = TSC.WorkbookItem(name=wb_item.name, project_id=dest_project_id)
-            published_wb = dest_server.workbooks.publish(
-                new_wb, 
-                path, 
-                mode=TSC.Server.PublishMode.Overwrite,
-                as_job=False  # Get immediate feedback
-            )
-            st.success(f"✅ Published workbook: {wb_item.name}")
-            
-            # Store published workbook reference
-            published_wb[wb_item.name] = published_wb
-            
-            # Migrate permissions
-            migrate_permissions(src_server, wb_item, dest_server, published_wb, 'workbook', user_map)
-            
-            # Migrate schedules if enabled
-            if migrate_schedules:
-                migrate_extract_schedules(
-                    src_server, 
-                    dest_server, 
-                    wb_item, 
-                    published_wb, 
-                    'workbook', 
-                    dest_project_id
-                )
-            
-            # Migrate subscriptions
-            migrate_subscriptions(src_server, dest_server, wb_item, published_wb, 'workbook', user_map)
-            
-            time.sleep(1)  # Small delay to avoid rate limiting
-            
-        except Exception as e:
-            st.error(f"❌ Failed to publish workbook {wb_item.name}: {e}")
-            if "Datasource not found" in str(e):
-                st.warning("This workbook may reference datasources that weren't migrated successfully")
-    
-    # Migrate custom views after workbooks are published
-    if custom_views:
-        migrate_custom_views(src_server, dest_server, wb_item.project_id, dest_project_id, user_map)
-
-# --------------------------
 # Schedule Migration Functions
 # --------------------------
 def get_extract_schedules(server, content_item, item_type: str) -> List[Dict]:
@@ -574,6 +480,121 @@ def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type,
         st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {e}")
 
 # --------------------------
+# Content Publishing Functions
+# --------------------------
+def publish_content(server, content_item, file_path, project_id, content_type):
+    """Publish content to Tableau Server."""
+    try:
+        if content_type == 'datasource':
+            new_item = TSC.DatasourceItem(name=content_item.name, project_id=project_id)
+            success = server.datasources.publish(
+                new_item,
+                file_path,
+                mode=TSC.Server.PublishMode.Overwrite
+            )
+            if success:
+                # Get the published datasource
+                published_item = server.datasources.get_by_id(content_item.id)
+                if not published_item:
+                    # If can't find by ID, try to find by name
+                    all_datasources, _ = server.datasources.get()
+                    published_item = next((ds for ds in all_datasources if ds.name == content_item.name and ds.project_id == project_id), None)
+                return published_item
+        elif content_type == 'workbook':
+            new_item = TSC.WorkbookItem(name=content_item.name, project_id=project_id)
+            success = server.workbooks.publish(
+                new_item,
+                file_path,
+                mode=TSC.Server.PublishMode.Overwrite,
+                as_job=False
+            )
+            if success:
+                # Get the published workbook
+                published_item = server.workbooks.get_by_id(content_item.id)
+                if not published_item:
+                    # If can't find by ID, try to find by name
+                    all_workbooks, _ = server.workbooks.get()
+                    published_item = next((wb for wb in all_workbooks if wb.name == content_item.name and wb.project_id == project_id), None)
+                return published_item
+        return None
+    except Exception as e:
+        st.error(f"❌ Failed to publish {content_type} {content_item.name}: {e}")
+        return None
+
+def publish_content_in_sequence(src_server, dest_server, downloaded_items, dest_project_id, migrate_schedules, user_map):
+    """Publish content in proper sequence (datasources first, then workbooks)."""
+    # Separate content types
+    datasources = [item for item in downloaded_items if item[2] == 'datasource']
+    workbooks = [item for item in downloaded_items if item[2] == 'workbook']
+    custom_views = [item for item in downloaded_items if item[2] == 'custom_view']
+    
+    published_ds = {}
+    published_wb = {}
+    
+    # Publish all datasources first
+    st.subheader("📊 Publishing Data Sources")
+    for ds_item, path, _ in datasources:
+        published_datasource = publish_content(dest_server, ds_item, path, dest_project_id, 'datasource')
+        if published_datasource:
+            published_ds[ds_item.name] = published_datasource
+            st.success(f"✅ Published datasource: {ds_item.name}")
+            
+            # Migrate permissions
+            migrate_permissions(src_server, ds_item, dest_server, published_datasource, 'datasource', user_map)
+            
+            # Migrate schedules if enabled
+            if migrate_schedules:
+                migrate_extract_schedules(
+                    src_server, 
+                    dest_server, 
+                    ds_item, 
+                    published_datasource, 
+                    'datasource', 
+                    dest_project_id
+                )
+            
+            # Migrate subscriptions
+            migrate_subscriptions(src_server, dest_server, ds_item, published_datasource, 'datasource', user_map)
+            
+            time.sleep(1)  # Small delay to avoid rate limiting
+        else:
+            st.error(f"❌ Failed to publish datasource: {ds_item.name}")
+    
+    # Publish workbooks after datasources are available
+    st.subheader("📚 Publishing Workbooks")
+    for wb_item, path, _ in workbooks:
+        published_workbook = publish_content(dest_server, wb_item, path, dest_project_id, 'workbook')
+        if published_workbook:
+            published_wb[wb_item.name] = published_workbook
+            st.success(f"✅ Published workbook: {wb_item.name}")
+            
+            # Migrate permissions
+            migrate_permissions(src_server, wb_item, dest_server, published_workbook, 'workbook', user_map)
+            
+            # Migrate schedules if enabled
+            if migrate_schedules:
+                migrate_extract_schedules(
+                    src_server, 
+                    dest_server, 
+                    wb_item, 
+                    published_workbook, 
+                    'workbook', 
+                    dest_project_id
+                )
+            
+            # Migrate subscriptions
+            migrate_subscriptions(src_server, dest_server, wb_item, published_workbook, 'workbook', user_map)
+            
+            time.sleep(1)  # Small delay to avoid rate limiting
+        else:
+            st.error(f"❌ Failed to publish workbook: {wb_item.name}")
+            st.warning("This workbook may reference datasources that weren't migrated successfully")
+    
+    # Migrate custom views after workbooks are published
+    if custom_views:
+        migrate_custom_views(src_server, dest_server, wb_item.project_id, dest_project_id, user_map)
+
+# --------------------------
 # Main Application
 # --------------------------
 def main():
@@ -621,9 +642,9 @@ def main():
         if migrate_users_groups:
             col5, col6 = st.columns(2)
             with col5:
-                migrate_users = st.checkbox("Migrate Users", value=True)
+                migrate_users_flag = st.checkbox("Migrate Users", value=True)
             with col6:
-                migrate_groups = st.checkbox("Migrate Groups", value=True)
+                migrate_groups_flag = st.checkbox("Migrate Groups", value=True)
         
         # Content Migration Section
         st.subheader("📦 Content to Migrate")
@@ -634,7 +655,7 @@ def main():
         )
         
         st.subheader("⏱️ Extract Refresh Settings")
-        migrate_schedules = st.checkbox(
+        migrate_schedules_flag = st.checkbox(
             "Migrate extract refresh schedules", 
             value=True,
             help="Enable to migrate extract refresh schedules along with content"
@@ -693,9 +714,9 @@ def main():
                     user_map = {}
                     group_map = {}
                     if migrate_users_groups:
-                        if migrate_users:
+                        if migrate_users_flag:
                             user_map = migrate_users(src_server, dest_server)
-                        if migrate_groups and user_map:
+                        if migrate_groups_flag and user_map:
                             group_map = migrate_groups(src_server, dest_server, user_map)
                     
                     # Get or create destination project
@@ -722,12 +743,12 @@ def main():
                     
                     # Publish content in proper sequence (datasources first)
                     if downloaded_items:
-                        publish_datasources_first(
+                        publish_content_in_sequence(
                             src_server,
                             dest_server,
                             downloaded_items,
                             dest_project.id,
-                            migrate_schedules,
+                            migrate_schedules_flag,
                             user_map
                         )
                     
