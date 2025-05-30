@@ -2,128 +2,170 @@ import streamlit as st
 import tableauserverclient as TSC
 import os
 import re
+from typing import List, Tuple
 
 # Set up Streamlit page configuration
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Tableau Content Migration Tool</h1>", unsafe_allow_html=True)
 
 def sanitize(name):
-    """Sanitize project or workbook names to create valid directory names."""
+    """Sanitize names to create valid directory names."""
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
 def create_local_dirs(project_name):
-    """Create local directories for source and destination workbooks."""
+    """Create local directories for all content types."""
     base = os.path.join(os.getcwd(), "tableau_migration")
-    src = os.path.join(base, "source", sanitize(project_name))
-    dest = os.path.join(base, "destination", sanitize(project_name))
-    os.makedirs(src, exist_ok=True)
-    os.makedirs(dest, exist_ok=True)
-    return src, dest
+    dirs = {
+        'workbooks': os.path.join(base, "workbooks", sanitize(project_name)),
+        'datasources': os.path.join(base, "datasources", sanitize(project_name)),
+        'views': os.path.join(base, "views", sanitize(project_name))
+    }
+    for dir_path in dirs.values():
+        os.makedirs(dir_path, exist_ok=True)
+    return dirs
 
-def get_local_path(type_: str, project_name: str, workbook_name: str) -> str:
-    """Generate local file path for a workbook."""
-    path = os.path.join(os.getcwd(), "tableau_migration", type_, sanitize(project_name))
-    return os.path.join(path, f"{sanitize(workbook_name)}.twbx")
+def download_content(server, project_id, project_name, content_type):
+    """Download content (workbooks/datasources) from Tableau Server."""
+    dirs = create_local_dirs(project_name)
+    downloaded_files = []
+    
+    if content_type == "workbook":
+        items, _ = server.workbooks.get()
+        for item in items:
+            if item.project_id == project_id:
+                path = os.path.join(dirs['workbooks'], f"{sanitize(item.name)}.twbx")
+                try:
+                    file_path = server.workbooks.download(item.id, filepath=path)
+                    if os.path.exists(file_path):
+                        downloaded_files.append((item, file_path, 'workbook'))
+                        st.success(f"✅ Downloaded workbook: {item.name}")
+                    else:
+                        st.error(f"❌ Workbook not saved: {item.name}")
+                except Exception as e:
+                    st.error(f"❌ Failed to download workbook {item.name}: {e}")
+    
+    elif content_type == "datasource":
+        items, _ = server.datasources.get()
+        for item in items:
+            if item.project_id == project_id:
+                path = os.path.join(dirs['datasources'], f"{sanitize(item.name)}.tdsx")
+                try:
+                    file_path = server.datasources.download(item.id, filepath=path)
+                    if os.path.exists(file_path):
+                        downloaded_files.append((item, file_path, 'datasource'))
+                        st.success(f"✅ Downloaded datasource: {item.name}")
+                    else:
+                        st.error(f"❌ Datasource not saved: {item.name}")
+                except Exception as e:
+                    st.error(f"❌ Failed to download datasource {item.name}: {e}")
+    
+    return downloaded_files
 
-def get_auth(method, token_name, token_value, username, password, site):
-    """Authenticate to Tableau Server."""
-    if method == "PAT":
-        return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site)
-    else:
-        return TSC.TableauAuth(username, password, site_id=site)
-
-def get_server(url):
-    """Initialize Tableau Server client."""
-    return TSC.Server(url, use_server_version=True)
-
-def download_workbooks(server, project_id, project_name):
-    """Download workbooks from the source server."""
+def download_views(server, project_id, project_name):
+    """Download custom views from workbooks in the project."""
+    dirs = create_local_dirs(project_name)
+    views_data = []
+    
     workbooks, _ = server.workbooks.get()
-    selected = [wb for wb in workbooks if wb.project_id == project_id]
-    files = []
-    for wb in selected:
-        path = get_local_path("source", project_name, wb.name)
-        st.info(f"⬇️ Downloading: {wb.name}")
+    project_workbooks = [wb for wb in workbooks if wb.project_id == project_id]
+    
+    for wb in project_workbooks:
         try:
-            file_path = server.workbooks.download(wb.id, filepath=path)
-            if os.path.exists(file_path):
-                files.append((wb, file_path))
-                st.success(f"✅ Downloaded: {wb.name}")
-            else:
-                st.error(f"❌ File not saved correctly: {wb.name}")
+            server.workbooks.populate_views(wb)
+            for view in wb.views:
+                if view.name != 'Sheet 1':  # Skip default views
+                    view_path = os.path.join(dirs['views'], f"{sanitize(wb.name)}_{sanitize(view.name)}.pdf")
+                    try:
+                        server.views.populate_image(view)
+                        with open(view_path, 'wb') as f:
+                            f.write(view.image)
+                        views_data.append((wb, view, view_path))
+                        st.success(f"✅ Downloaded view: {view.name} from {wb.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to download view {view.name}: {e}")
         except Exception as e:
-            st.error(f"❌ Download failed for {wb.name}: {e}")
-    return files
+            st.error(f"❌ Failed to process workbook {wb.name} for views: {e}")
+    
+    return views_data
 
-def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
-    """Migrate permissions from source to destination workbook."""
+def migrate_permissions(src_server, src_item, dest_server, dest_item, item_type):
+    """Migrate permissions for either workbook or datasource."""
     try:
-        src_server.workbooks.populate_permissions(src_wb)
-        dest_server.workbooks.populate_permissions(dest_wb)
-
-        src_perms = src_wb.permissions
-        dest_perms = dest_wb.permissions
-
+        if item_type == 'workbook':
+            src_server.workbooks.populate_permissions(src_item)
+            dest_server.workbooks.populate_permissions(dest_item)
+            permissions = src_item.permissions
+            permission_manager = dest_server.workbooks
+        elif item_type == 'datasource':
+            src_server.datasources.populate_permissions(src_item)
+            dest_server.datasources.populate_permissions(dest_item)
+            permissions = src_item.permissions
+            permission_manager = dest_server.datasources
+        
         # Clear existing destination permissions
-        for perm in dest_perms:
-            dest_server.workbooks._permissions.delete(dest_wb, perm)
-
+        for perm in dest_item.permissions:
+            permission_manager._permissions.delete(dest_item, perm)
+        
+        # Get user/group mappings
         src_users, _ = src_server.users.get()
         src_groups, _ = src_server.groups.get()
         dest_users, _ = dest_server.users.get()
         dest_groups, _ = dest_server.groups.get()
-
+        
         src_user_map = {u.id: u for u in src_users}
         src_group_map = {g.id: g for g in src_groups}
         dest_user_map = {u.name: u for u in dest_users}
         dest_group_map = {g.name: g for g in dest_groups}
-
+        
         missing_grantees = []
-
-        for perm in src_perms:
+        
+        for perm in permissions:
             grantee_ref = perm.grantee
             dest_grantee = None
-
+            
             if grantee_ref.tag_name == 'user':
                 src_user = src_user_map.get(grantee_ref.id)
                 if src_user and src_user.name in dest_user_map:
                     dest_grantee = dest_user_map[src_user.name]
                 else:
                     missing_grantees.append(src_user.name if src_user else grantee_ref.id)
-
+            
             elif grantee_ref.tag_name == 'group':
                 src_group = src_group_map.get(grantee_ref.id)
                 if src_group and src_group.name in dest_group_map:
                     dest_grantee = dest_group_map[src_group.name]
                 else:
                     missing_grantees.append(src_group.name if src_group else grantee_ref.id)
-
+            
             if dest_grantee:
                 new_perm = TSC.PermissionsRule(grantee=dest_grantee, capabilities=perm.capabilities)
-                dest_server.workbooks.update_permissions(dest_wb, [new_perm])
-            else:
-                st.warning(f"⚠️ Skipped permission for unknown grantee with ID: {grantee_ref.id}")
-
+                permission_manager.update_permissions(dest_item, [new_perm])
+        
         if missing_grantees:
-            st.info("ℹ️ Skipped the following missing users/groups:")
+            st.warning(f"⚠️ Skipped permissions for missing users/groups in {item_type} {src_item.name}:")
             st.write(list(set(missing_grantees)))
-
-        st.success(f"🔑 Permissions migrated for workbook: {src_wb.name}")
-
+        
+        st.success(f"🔑 Permissions migrated for {item_type}: {src_item.name}")
+    
     except Exception as e:
-        st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
+        st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {e}")
 
-def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
-    """Publish workbooks to the destination server."""
-    for wb, path in files_and_wbs:
-        st.info(f"⬆️ Publishing: {wb.name}")
+def publish_content(src_server, dest_server, downloaded_items, dest_project_id, content_type):
+    """Publish content to destination server."""
+    for item, path, item_type in downloaded_items:
+        st.info(f"⬆️ Publishing {item_type}: {item.name}")
         try:
-            new_wb = TSC.WorkbookItem(name=wb.name, project_id=dest_project_id)
-            published_wb = dest_server.workbooks.publish(new_wb, path, mode=TSC.Server.PublishMode.Overwrite)
-            st.success(f"✅ Published: {wb.name}")
-            migrate_permissions(src_server, wb, dest_server, published_wb)
+            if item_type == 'workbook':
+                new_item = TSC.WorkbookItem(name=item.name, project_id=dest_project_id)
+                published_item = dest_server.workbooks.publish(new_item, path, mode=TSC.Server.PublishMode.Overwrite)
+            elif item_type == 'datasource':
+                new_item = TSC.DatasourceItem(name=item.name, project_id=dest_project_id)
+                published_item = dest_server.datasources.publish(new_item, path, mode=TSC.Server.PublishMode.Overwrite)
+            
+            st.success(f"✅ Published {item_type}: {item.name}")
+            migrate_permissions(src_server, item, dest_server, published_item, item_type)
         except Exception as e:
-            st.error(f"❌ Failed to publish {wb.name}: {e}")
+            st.error(f"❌ Failed to publish {item_type} {item.name}: {e}")
 
 def get_or_create_project(server, project_name):
     """Get or create a project on the destination server."""
@@ -137,7 +179,7 @@ def get_or_create_project(server, project_name):
         st.info(f"📁 Created destination project: {project_name}")
         return created_project
 
-# Streamlit UI Form
+# Streamlit UI
 with st.form("migration_form"):
     st.subheader("🔐 Source Server Configuration")
     col1, col2 = st.columns(2)
@@ -173,7 +215,13 @@ with st.form("migration_form"):
     
     st.subheader("📂 Migration Settings")
     src_project_name = st.text_input("Source Project Name", help="Name of the project to migrate from")
-    dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to (will be created if it doesn't exist)")
+    dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to")
+    
+    content_types = st.multiselect(
+        "Select content types to migrate",
+        ["Workbooks", "Data Sources", "Custom Views"],
+        default=["Workbooks", "Data Sources"]
+    )
     
     submitted = st.form_submit_button("🚀 Start Migration")
 
@@ -182,6 +230,10 @@ if submitted:
         # Validate inputs
         if not all([src_server_url, dest_server_url, src_project_name, dest_project_name]):
             st.error("Please fill in all required fields")
+            st.stop()
+        
+        if not content_types:
+            st.error("Please select at least one content type to migrate")
             st.stop()
         
         # Authenticate to source server
@@ -220,21 +272,30 @@ if submitted:
             with dest_server.auth.sign_in(dest_auth):
                 st.success("🔓 Successfully connected to destination server")
                 
-                # Create local directories
-                create_local_dirs(src_project_name)
-                
-                # Download workbooks from source
-                files_and_wbs = download_workbooks(src_server, src_project.id, src_project_name)
-                
-                if not files_and_wbs:
-                    st.warning("⚠️ No workbooks found to migrate")
-                    st.stop()
-                
                 # Get or create destination project
                 dest_project = get_or_create_project(dest_server, dest_project_name)
                 
-                # Publish workbooks to destination
-                publish_workbooks(src_server, dest_server, files_and_wbs, dest_project.id, dest_project_name)
+                # Download and migrate selected content types
+                downloaded_items = []
+                
+                if "Workbooks" in content_types:
+                    st.subheader("📚 Workbooks Migration")
+                    wb_items = download_content(src_server, src_project.id, src_project_name, "workbook")
+                    downloaded_items.extend(wb_items)
+                
+                if "Data Sources" in content_types:
+                    st.subheader("📊 Data Sources Migration")
+                    ds_items = download_content(src_server, src_project.id, src_project_name, "datasource")
+                    downloaded_items.extend(ds_items)
+                
+                if "Custom Views" in content_types:
+                    st.subheader("👁️ Custom Views Migration")
+                    view_items = download_views(src_server, src_project.id, src_project_name)
+                
+                # Publish downloaded content
+                if downloaded_items:
+                    st.subheader("🚀 Publishing Content to Destination")
+                    publish_content(src_server, dest_server, downloaded_items, dest_project.id, "workbook")
                 
                 st.balloons()
                 st.success("🎉 Migration completed successfully!")
