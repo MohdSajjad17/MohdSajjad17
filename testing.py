@@ -3,6 +3,7 @@ import tableauserverclient as TSC
 import os
 import re
 
+# Set up Streamlit page configuration
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -13,9 +14,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def sanitize(name):
+    """Sanitize project or workbook names to create valid directory names."""
     return re.sub(r'[^\w\-_\. ]', '_', name)
 
 def create_local_dirs(project_name):
+    """Create local directories for source and destination workbooks."""
     base = os.path.join(os.getcwd(), "tableau_migration")
     src = os.path.join(base, "source", sanitize(project_name))
     dest = os.path.join(base, "destination", sanitize(project_name))
@@ -24,19 +27,23 @@ def create_local_dirs(project_name):
     return src, dest
 
 def get_local_path(type_: str, project_name: str, workbook_name: str) -> str:
+    """Generate local file path for a workbook."""
     path = os.path.join(os.getcwd(), "tableau_migration", type_, sanitize(project_name))
     return os.path.join(path, f"{sanitize(workbook_name)}.twbx")
 
 def get_auth(method, token_name, token_value, username, password, site):
+    """Authenticate to Tableau Server."""
     if method == "PAT":
         return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site)
     else:
         return TSC.TableauAuth(username, password, site_id=site)
 
 def get_server(url):
+    """Initialize Tableau Server client."""
     return TSC.Server(url, use_server_version=True)
 
 def download_workbooks(server, project_id, project_name):
+    """Download workbooks from the source server."""
     workbooks, _ = server.workbooks.get()
     selected = [wb for wb in workbooks if wb.project_id == project_id]
     files = []
@@ -55,6 +62,7 @@ def download_workbooks(server, project_id, project_name):
     return files
 
 def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
+    """Migrate permissions from source to destination workbook."""
     try:
         src_server.workbooks.populate_permissions(src_wb)
         dest_server.workbooks.populate_permissions(dest_wb)
@@ -112,6 +120,7 @@ def migrate_permissions(src_server, src_wb, dest_server, dest_wb):
         st.error(f"❌ Failed to migrate permissions for {src_wb.name}: {e}")
 
 def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, project_name):
+    """Publish workbooks to the destination server."""
     for wb, path in files_and_wbs:
         st.info(f"⬆️ Publishing: {wb.name}")
         try:
@@ -123,6 +132,7 @@ def publish_workbooks(src_server, dest_server, files_and_wbs, dest_project_id, p
             st.error(f"❌ Failed to publish {wb.name}: {e}")
 
 def get_or_create_project(server, project_name):
+    """Get or create a project on the destination server."""
     projects, _ = server.projects.get()
     project = next((p for p in projects if p.name == project_name), None)
     if project:
@@ -133,23 +143,8 @@ def get_or_create_project(server, project_name):
         st.info(f"📁 Created destination project: {project_name}")
         return created_project
 
-# ----------------------------
 # Streamlit UI Form
-# ----------------------------
 with st.form("migration_form"):
-    st.subheader("🔐 Source Tableau")
-    src_url = st.text_input("Source Server URL")
-    src_site = st.text_input("Source Site Content URL (leave blank for default site)")
-    src_auth_method = st.selectbox("Source Auth Method", ["PAT", "Username & Password"], key="src_auth")
-    if src_auth_method == "PAT":
-        src_token_name = st.text_input("Source PAT Name")
-        src_token_secret = st.text_input("Source PAT Secret", type="password")
-        src_username = src_password = None
-    else:
-        src_username = st.text_input("Source Username")
-        src_password = st.text_input("Source Password", type="password")
-        src_token_name = src_token_secret = None
-
-
+    st.subheader
 ::contentReference[oaicite:0]{index=0}
  
