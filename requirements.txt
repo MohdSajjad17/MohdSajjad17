@@ -3,3 +3,4 @@ tableauserverclient>=0.26
 requests>=2.31.0
 python-dotenv
 tableau_migration
+pandas>=1.5.0
