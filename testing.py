@@ -60,6 +60,104 @@ def get_or_create_project(server, project_name, parent_project_id=None):
     return project
 
 # --------------------------
+# User and Group Migration Functions
+# --------------------------
+def migrate_users(src_server, dest_server):
+    """Migrate users from source to destination server."""
+    st.subheader("👤 Migrating Users")
+    src_users, _ = src_server.users.get()
+    dest_users, _ = dest_server.users.get()
+    
+    src_user_map = {u.name.lower(): u for u in src_users}
+    dest_user_map = {u.name.lower(): u for u in dest_users}
+    
+    migrated_users = 0
+    skipped_users = 0
+    
+    for user in src_users:
+        # Skip system users
+        if user.name.lower() in ['system', 'guest', 'tableau']:
+            continue
+            
+        if user.name.lower() not in dest_user_map:
+            try:
+                new_user = TSC.UserItem(
+                    name=user.name,
+                    fullname=user.fullname,
+                    email=user.email,
+                    site_role=user.site_role
+                )
+                created_user = dest_server.users.add(new_user)
+                dest_user_map[user.name.lower()] = created_user
+                st.success(f"✅ Created user: {user.name}")
+                migrated_users += 1
+            except Exception as e:
+                st.error(f"❌ Failed to create user {user.name}: {e}")
+                skipped_users += 1
+        else:
+            st.info(f"ℹ️ User already exists: {user.name}")
+            skipped_users += 1
+    
+    st.info(f"ℹ️ User migration summary: {migrated_users} migrated, {skipped_users} skipped")
+    return dest_user_map
+
+def migrate_groups(src_server, dest_server, user_map):
+    """Migrate groups and their memberships from source to destination server."""
+    st.subheader("👥 Migrating Groups")
+    src_groups, _ = src_server.groups.get()
+    dest_groups, _ = dest_server.groups.get()
+    
+    src_group_map = {g.name.lower(): g for g in src_groups}
+    dest_group_map = {g.name.lower(): g for g in dest_groups}
+    
+    migrated_groups = 0
+    skipped_groups = 0
+    
+    # First create all groups
+    for group in src_groups:
+        if group.name.lower() not in dest_group_map:
+            try:
+                new_group = TSC.GroupItem(group.name)
+                created_group = dest_server.groups.create(new_group)
+                dest_group_map[group.name.lower()] = created_group
+                st.success(f"✅ Created group: {group.name}")
+                migrated_groups += 1
+            except Exception as e:
+                st.error(f"❌ Failed to create group {group.name}: {e}")
+                skipped_groups += 1
+        else:
+            st.info(f"ℹ️ Group already exists: {group.name}")
+            skipped_groups += 1
+    
+    # Then populate group memberships
+    st.subheader("👥➡👤 Migrating Group Memberships")
+    for group in src_groups:
+        if group.name.lower() in dest_group_map:
+            dest_group = dest_group_map[group.name.lower()]
+            
+            # Get source group members
+            src_server.groups.populate_users(group)
+            if not hasattr(group, 'users'):
+                continue
+                
+            added_members = 0
+            for user in group.users:
+                if user.name.lower() in user_map:
+                    try:
+                        dest_server.groups.add_user(dest_group.id, user_map[user.name.lower()].id)
+                        st.success(f"✅ Added user {user.name} to group {group.name}")
+                        added_members += 1
+                    except Exception as e:
+                        st.error(f"❌ Failed to add user {user.name} to group {group.name}: {e}")
+                else:
+                    st.warning(f"⚠️ User not found in destination: {user.name}")
+            
+            st.info(f"ℹ️ Added {added_members} members to group {group.name}")
+    
+    st.info(f"ℹ️ Group migration summary: {migrated_groups} migrated, {skipped_groups} skipped")
+    return dest_group_map
+
+# --------------------------
 # Content Download Functions
 # --------------------------
 def download_content(server, project_id, project_name, content_type):
@@ -120,76 +218,6 @@ def download_content(server, project_id, project_name, content_type):
         st.error(f"❌ Error getting {content_type} list: {e}")
     
     return downloaded_files
-
-# --------------------------
-# User and Group Migration
-# --------------------------
-def migrate_users_and_groups(src_server, dest_server, migrate_users=True, migrate_groups=True):
-    """Migrate users and groups between servers."""
-    if not (migrate_users or migrate_groups):
-        return
-    
-    st.subheader("👥 Migrating Users and Groups")
-    
-    # Get source and destination users/groups
-    src_users, _ = src_server.users.get()
-    src_groups, _ = src_server.groups.get()
-    dest_users, _ = dest_server.users.get()
-    dest_groups, _ = dest_server.groups.get()
-    
-    # Create mappings
-    src_user_map = {u.name.lower(): u for u in src_users}
-    src_group_map = {g.name.lower(): g for g in src_groups}
-    dest_user_map = {u.name.lower(): u for u in dest_users}
-    dest_group_map = {g.name.lower(): g for g in dest_groups}
-    
-    # Migrate groups first
-    if migrate_groups:
-        st.info("🔄 Migrating groups...")
-        for group in src_groups:
-            if group.name.lower() not in dest_group_map:
-                try:
-                    new_group = TSC.GroupItem(group.name)
-                    created_group = dest_server.groups.create(new_group)
-                    dest_group_map[group.name.lower()] = created_group
-                    st.success(f"✅ Created group: {group.name}")
-                except Exception as e:
-                    st.error(f"❌ Failed to create group {group.name}: {e}")
-    
-    # Migrate users
-    if migrate_users:
-        st.info("🔄 Migrating users...")
-        for user in src_users:
-            if user.name.lower() not in dest_user_map:
-                try:
-                    # Skip system users
-                    if user.name.lower() in ['system', 'guest', 'tableau']:
-                        continue
-                        
-                    new_user = TSC.UserItem(
-                        name=user.name,
-                        fullname=user.fullname,
-                        email=user.email,
-                        site_role=user.site_role
-                    )
-                    created_user = dest_server.users.add(new_user)
-                    dest_user_map[user.name.lower()] = created_user
-                    st.success(f"✅ Created user: {user.name}")
-                    
-                    # Add user to groups
-                    if migrate_groups:
-                        user_groups, _ = src_server.groups.populate_users(group)
-                        for group in user_groups:
-                            if group.name.lower() in dest_group_map:
-                                dest_server.groups.add_user(
-                                    dest_group_map[group.name.lower()].id, 
-                                    created_user.id
-                                )
-                                st.info(f"👥 Added user {user.name} to group {group.name}")
-                except Exception as e:
-                    st.error(f"❌ Failed to create user {user.name}: {e}")
-    
-    return dest_user_map, dest_group_map
 
 # --------------------------
 # Subscription Migration
@@ -586,11 +614,18 @@ def main():
         src_project_name = st.text_input("Source Project Name", help="Name of the project to migrate from")
         dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to")
         
-        # Toggle for user/group migration
+        # User and Group Migration Section
         st.subheader("👥 User and Group Migration")
-        migrate_users_groups = st.checkbox("Migrate Users and Groups", value=True)
+        migrate_users_groups = st.checkbox("Enable User and Group Migration", value=True)
         
-        # Content type selection
+        if migrate_users_groups:
+            col5, col6 = st.columns(2)
+            with col5:
+                migrate_users = st.checkbox("Migrate Users", value=True)
+            with col6:
+                migrate_groups = st.checkbox("Migrate Groups", value=True)
+        
+        # Content Migration Section
         st.subheader("📦 Content to Migrate")
         content_types = st.multiselect(
             "Select content types to migrate",
@@ -656,8 +691,12 @@ def main():
                     
                     # Migrate users and groups first if enabled
                     user_map = {}
+                    group_map = {}
                     if migrate_users_groups:
-                        user_map, _ = migrate_users_and_groups(src_server, dest_server)
+                        if migrate_users:
+                            user_map = migrate_users(src_server, dest_server)
+                        if migrate_groups and user_map:
+                            group_map = migrate_groups(src_server, dest_server, user_map)
                     
                     # Get or create destination project
                     dest_project = get_or_create_project(dest_server, dest_project_name)
