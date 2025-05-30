@@ -6,12 +6,6 @@ import re
 # Set up Streamlit page configuration
 st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Welcome to Migration World</h1>", unsafe_allow_html=True)
-st.markdown("""
-    <style>
-    .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
-    </style>
-    <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
-""", unsafe_allow_html=True)
 
 def sanitize(name):
     """Sanitize project or workbook names to create valid directory names."""
@@ -145,6 +139,112 @@ def get_or_create_project(server, project_name):
 
 # Streamlit UI Form
 with st.form("migration_form"):
-    st.subheader
-::contentReference[oaicite:0]{index=0}
- 
+    st.subheader("🔐 Source Server Configuration")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        src_auth_method = st.radio("Authentication Method", ["PAT", "Username/Password"], key="src_auth")
+        src_server_url = st.text_input("Source Server URL", help="e.g., https://server.tableau.com")
+        src_site = st.text_input("Source Site ID", value="", help="Leave empty for default site")
+    
+    with col2:
+        if src_auth_method == "PAT":
+            src_token_name = st.text_input("Source Personal Access Token Name")
+            src_token_value = st.text_input("Source Personal Access Token Value", type="password")
+        else:
+            src_username = st.text_input("Source Username")
+            src_password = st.text_input("Source Password", type="password")
+    
+    st.subheader("🔐 Destination Server Configuration")
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        dest_auth_method = st.radio("Authentication Method", ["PAT", "Username/Password"], key="dest_auth")
+        dest_server_url = st.text_input("Destination Server URL", help="e.g., https://server.tableau.com")
+        dest_site = st.text_input("Destination Site ID", value="", help="Leave empty for default site")
+    
+    with col4:
+        if dest_auth_method == "PAT":
+            dest_token_name = st.text_input("Destination Personal Access Token Name")
+            dest_token_value = st.text_input("Destination Personal Access Token Value", type="password")
+        else:
+            dest_username = st.text_input("Destination Username")
+            dest_password = st.text_input("Destination Password", type="password")
+    
+    st.subheader("📂 Migration Settings")
+    src_project_name = st.text_input("Source Project Name", help="Name of the project to migrate from")
+    dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to (will be created if it doesn't exist)")
+    
+    submitted = st.form_submit_button("🚀 Start Migration")
+
+if submitted:
+    try:
+        # Validate inputs
+        if not all([src_server_url, dest_server_url, src_project_name, dest_project_name]):
+            st.error("Please fill in all required fields")
+            st.stop()
+        
+        # Authenticate to source server
+        src_auth = get_auth(
+            src_auth_method,
+            src_token_name if src_auth_method == "PAT" else None,
+            src_token_value if src_auth_method == "PAT" else None,
+            src_username if src_auth_method != "PAT" else None,
+            src_password if src_auth_method != "PAT" else None,
+            src_site
+        )
+        
+        src_server = get_server(src_server_url)
+        with src_server.auth.sign_in(src_auth):
+            st.success("🔓 Successfully connected to source server")
+            
+            # Get source project
+            projects, _ = src_server.projects.get()
+            src_project = next((p for p in projects if p.name == src_project_name), None)
+            
+            if not src_project:
+                st.error(f"❌ Source project '{src_project_name}' not found")
+                st.stop()
+            
+            # Authenticate to destination server
+            dest_auth = get_auth(
+                dest_auth_method,
+                dest_token_name if dest_auth_method == "PAT" else None,
+                dest_token_value if dest_auth_method == "PAT" else None,
+                dest_username if dest_auth_method != "PAT" else None,
+                dest_password if dest_auth_method != "PAT" else None,
+                dest_site
+            )
+            
+            dest_server = get_server(dest_server_url)
+            with dest_server.auth.sign_in(dest_auth):
+                st.success("🔓 Successfully connected to destination server")
+                
+                # Create local directories
+                create_local_dirs(src_project_name)
+                
+                # Download workbooks from source
+                files_and_wbs = download_workbooks(src_server, src_project.id, src_project_name)
+                
+                if not files_and_wbs:
+                    st.warning("⚠️ No workbooks found to migrate")
+                    st.stop()
+                
+                # Get or create destination project
+                dest_project = get_or_create_project(dest_server, dest_project_name)
+                
+                # Publish workbooks to destination
+                publish_workbooks(src_server, dest_server, files_and_wbs, dest_project.id, dest_project_name)
+                
+                st.balloons()
+                st.success("🎉 Migration completed successfully!")
+    
+    except Exception as e:
+        st.error(f"❌ Migration failed: {str(e)}")
+
+st.markdown("""
+    <style>
+    .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
+    </style>
+    <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
+""", unsafe_allow_html=True)
