@@ -69,6 +69,127 @@ def get_or_create_project(server: TSC.Server, project_name: str, parent_project_
         raise
 
 # --------------------------
+# Permission and Schedule Migration
+# --------------------------
+def migrate_permissions(
+    src_server: TSC.Server,
+    src_item,
+    dest_server: TSC.Server,
+    dest_item,
+    item_type: str,
+    user_map: Dict[str, TSC.UserItem]
+):
+    """Migrate permissions from source to destination item."""
+    try:
+        # Get source permissions
+        if item_type == 'workbook':
+            src_server.workbooks.populate_permissions(src_item)
+            permissions = src_item.permissions
+        elif item_type == 'datasource':
+            src_server.datasources.populate_permissions(src_item)
+            permissions = src_item.permissions
+        else:
+            return
+
+        if not permissions:
+            st.info(f"ℹ️ No permissions to migrate for {item_type} {src_item.name}")
+            return
+
+        # Prepare new permissions
+        new_permissions = []
+        for rule in permissions:
+            grantee_type = rule.grantee.tag_name
+            capabilities = rule.capabilities
+
+            # Map user/group if needed
+            if grantee_type == 'user':
+                if rule.grantee.name.lower() in user_map:
+                    grantee = TSC.UserItem.as_reference(user_map[rule.grantee.name.lower()].id)
+                else:
+                    st.warning(f"⚠️ User {rule.grantee.name} not found in destination, skipping permission")
+                    continue
+            elif grantee_type == 'group':
+                grantee = TSC.GroupItem.as_reference(rule.grantee.id)
+            else:
+                continue
+
+            new_permissions.append(
+                TSC.PermissionsRule(
+                    grantee=grantee,
+                    capabilities=capabilities
+                )
+            )
+
+        # Apply permissions
+        if item_type == 'workbook':
+            dest_server.workbooks.update_permissions(dest_item, new_permissions)
+        elif item_type == 'datasource':
+            dest_server.datasources.update_permissions(dest_item, new_permissions)
+
+        st.success(f"✅ Migrated permissions for {item_type} {src_item.name}")
+
+    except Exception as e:
+        st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {str(e)}")
+        raise
+
+def migrate_extract_schedules(
+    src_server: TSC.Server,
+    dest_server: TSC.Server,
+    src_item,
+    dest_item,
+    item_type: str,
+    project_id: str
+):
+    """Migrate extract refresh schedules from source to destination item."""
+    try:
+        # Get source schedules
+        if item_type == 'workbook':
+            schedules = src_server.workbooks.get_extract_refresh_schedules(src_item.id)
+        elif item_type == 'datasource':
+            schedules = src_server.datasources.get_extract_refresh_schedules(src_item.id)
+        else:
+            return
+
+        if not schedules:
+            st.info(f"ℹ️ No extract schedules to migrate for {item_type} {src_item.name}")
+            return
+
+        # Create destination schedules
+        for schedule in schedules:
+            new_schedule = TSC.ScheduleItem(
+                name=schedule.name,
+                priority=schedule.priority,
+                frequency=schedule.frequency,
+                execution_order=schedule.execution_order,
+                state=schedule.state
+            )
+
+            # Set time details based on frequency
+            if schedule.frequency == 'Hourly':
+                new_schedule.hourly_schedule = schedule.hourly_schedule
+            elif schedule.frequency == 'Daily':
+                new_schedule.daily_schedule = schedule.daily_schedule
+            elif schedule.frequency == 'Weekly':
+                new_schedule.weekly_schedule = schedule.weekly_schedule
+            elif schedule.frequency == 'Monthly':
+                new_schedule.monthly_schedule = schedule.monthly_schedule
+
+            # Create schedule on destination
+            created_schedule = dest_server.schedules.create(new_schedule)
+
+            # Assign schedule to item
+            if item_type == 'workbook':
+                dest_server.workbooks.add_extract_refresh_task(dest_item.id, created_schedule.id)
+            elif item_type == 'datasource':
+                dest_server.datasources.add_extract_refresh_task(dest_item.id, created_schedule.id)
+
+            st.success(f"✅ Created schedule {schedule.name} for {item_type} {src_item.name}")
+
+    except Exception as e:
+        st.error(f"❌ Failed to migrate schedules for {item_type} {src_item.name}: {str(e)}")
+        raise
+
+# --------------------------
 # User and Group Migration
 # --------------------------
 def migrate_users(src_server: TSC.Server, dest_server: TSC.Server) -> Dict[str, TSC.UserItem]:
@@ -91,12 +212,11 @@ def migrate_users(src_server: TSC.Server, dest_server: TSC.Server) -> Dict[str, 
                 
             if user.name.lower() not in dest_user_map:
                 try:
-                    # Updated user creation without 'fullname'
                     new_user = TSC.UserItem(
                         name=user.name,
                         site_role=user.site_role
                     )
-                    # Add email if available (some TSC versions support it)
+                    # Add email if available
                     if hasattr(user, 'email'):
                         new_user.email = user.email
                     
@@ -161,14 +281,13 @@ def migrate_groups(src_server: TSC.Server, dest_server: TSC.Server, user_map: Di
                 for user in group.users:
                     if user.name.lower() in user_map:
                         try:
-                            # Ensure we have a UserItem object with ID
                             dest_user = user_map[user.name.lower()]
-                            if hasattr(dest_user, 'id'):
+                            if isinstance(dest_user, TSC.UserItem):
                                 dest_server.groups.add_user(dest_group.id, dest_user.id)
                                 st.success(f"✅ Added user {user.name} to group {group.name}")
                                 added_members += 1
                             else:
-                                st.error(f"❌ User object missing ID: {user.name}")
+                                st.error(f"❌ Invalid user object for {user.name}")
                         except Exception as e:
                             st.error(f"❌ Failed to add user {user.name} to group {group.name}: {str(e)}")
                     else:
@@ -275,8 +394,8 @@ def publish_workbook(server: TSC.Server, wb_item: TSC.WorkbookItem, file_path: s
             new_item,
             file_path,
             mode=TSC.Server.PublishMode.Overwrite,
-            as_job=False,
-            include_extract=True  # Include extracts to prevent connection errors
+            as_job=False
+            # Removed include_extract as it's not supported in newer versions
         )
         
         # Verify publication
@@ -288,7 +407,6 @@ def publish_workbook(server: TSC.Server, wb_item: TSC.WorkbookItem, file_path: s
             return None
     except Exception as e:
         st.error(f"❌ Failed to publish workbook {wb_item.name}: {str(e)}")
-        # Additional error details for connection issues
         if "failed to establish a connection" in str(e).lower():
             st.warning("⚠️ This workbook may reference datasources that weren't migrated successfully")
             st.warning("Try publishing the dependent datasources first or check connection settings")
