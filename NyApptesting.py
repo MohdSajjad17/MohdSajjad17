@@ -4,11 +4,15 @@ import os
 import re
 import time
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Set up Streamlit page configuration
+st.set_page_config(page_title="Tableau Migration Tool", layout="wide")
+st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Tableau Content Migration Tool</h1>", unsafe_allow_html=True)
 
 # --------------------------
 # Utility Functions
@@ -31,179 +35,52 @@ def create_local_dirs(project_name: str) -> Dict[str, str]:
         os.makedirs(dir_path, exist_ok=True)
     return dirs
 
-def get_auth(method: str, token_name: str, token_value: str, 
-             username: str, password: str, site: str) -> TSC.Auth:
+def get_auth(method: str, token_name: str, token_value: str, username: str, password: str, site: str):
     """Authenticate to Tableau Server."""
     if method == "PAT":
         return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site)
-    return TSC.TableauAuth(username, password, site_id=site)
+    else:
+        return TSC.TableauAuth(username, password, site_id=site)
 
 def get_server(url: str) -> TSC.Server:
-    """Initialize Tableau Server client with proper settings."""
+    """Initialize Tableau Server client."""
     server = TSC.Server(url, use_server_version=True)
     server.add_http_options({'verify': False})  # Disable SSL verification if needed
-    server.add_http_options({'timeout': 300})  # Increase timeout for large operations
     return server
 
-def get_or_create_project(server: TSC.Server, project_name: str, 
-                         parent_project_id: Optional[str] = None) -> TSC.ProjectItem:
+def get_or_create_project(server: TSC.Server, project_name: str, parent_project_id: str = None) -> TSC.ProjectItem:
     """Get or create a project on the destination server."""
     try:
         all_projects = list(TSC.Pager(server.projects))
         project = next((p for p in all_projects if p.name == project_name), None)
         
         if not project:
-            new_project = TSC.ProjectItem(
-                name=project_name, 
-                content_permissions="ManagedByOwner",
-                description=f"Migrated project - {time.strftime('%Y-%m-%d')}"
-            )
+            new_project = TSC.ProjectItem(name=project_name, content_permissions="ManagedByOwner")
             if parent_project_id:
                 new_project.parent_id = parent_project_id
             project = server.projects.create(new_project)
-            logger.info(f"Created new project: {project_name}")
+            st.success(f"✅ Created new project: {project_name}")
         else:
-            logger.info(f"Using existing project: {project_name}")
+            st.info(f"ℹ️ Using existing project: {project_name}")
         
         return project
     except Exception as e:
-        logger.error(f"Failed to get/create project {project_name}: {str(e)}")
+        st.error(f"❌ Failed to get/create project {project_name}: {str(e)}")
         raise
-
-# --------------------------
-# Content Download Functions
-# --------------------------
-def download_content(server: TSC.Server, project_id: str, project_name: str, 
-                    content_type: str) -> List[Tuple]:
-    """Download content (workbooks/datasources) from Tableau Server."""
-    dirs = create_local_dirs(project_name)
-    downloaded_files = []
-    content_map = {
-        "workbook": (server.workbooks, "twbx", "workbook"),
-        "datasource": (server.datasources, "tdsx", "datasource"),
-        "custom_view": (server.views, "tvc", "custom_view")
-    }
-    
-    if content_type not in content_map:
-        raise ValueError(f"Unsupported content type: {content_type}")
-    
-    endpoint, extension, item_type = content_map[content_type]
-    
-    try:
-        items = list(TSC.Pager(endpoint))
-        for item in items:
-            if (content_type != "custom_view" and item.project_id == project_id) or \
-               (content_type == "custom_view" and hasattr(item, 'workbook') and item.workbook.project_id == project_id):
-                
-                if content_type == "custom_view":
-                    path = os.path.join(dirs['views'], f"{sanitize(item.name)}.{extension}")
-                    view_data = {
-                        'name': item.name,
-                        'workbook_name': item.workbook.name,
-                        'owner_name': item.owner.name if hasattr(item, 'owner') else None,
-                        'view_data': item._view_data if hasattr(item, '_view_data') else None
-                    }
-                    downloaded_files.append((view_data, path, item_type))
-                    logger.info(f"Captured custom view: {item.name}")
-                    continue
-                
-                path = os.path.join(dirs[item_type + 's'], f"{sanitize(item.name)}.{extension}")
-                try:
-                    if content_type == "workbook":
-                        file_path = endpoint.download(item.id, filepath=path, include_extract=True)
-                    else:
-                        file_path = endpoint.download(item.id, filepath=path, include_extract=True)
-                    
-                    if os.path.exists(file_path):
-                        downloaded_files.append((item, file_path, item_type))
-                        logger.info(f"Downloaded {item_type}: {item.name}")
-                    else:
-                        logger.error(f"{item_type.capitalize()} not saved: {item.name}")
-                except Exception as e:
-                    logger.error(f"Failed to download {item_type} {item.name}: {str(e)}")
-                    continue
-    
-    except Exception as e:
-        logger.error(f"Error getting {item_type} list: {str(e)}")
-        raise
-    
-    return downloaded_files
-
-# --------------------------
-# Content Publishing Functions
-# --------------------------
-def publish_datasource(server: TSC.Server, ds_item: TSC.DatasourceItem, 
-                      file_path: str, project_id: str) -> Optional[TSC.DatasourceItem]:
-    """Publish a datasource to Tableau Server with error handling."""
-    try:
-        new_item = TSC.DatasourceItem(
-            name=ds_item.name, 
-            project_id=project_id,
-            description=getattr(ds_item, 'description', None) or f"Migrated on {time.strftime('%Y-%m-%d')}"
-        )
-        
-        published_ds = server.datasources.publish(
-            new_item,
-            file_path,
-            mode=TSC.Server.PublishMode.Overwrite,
-            as_job=False
-        )
-        
-        if published_ds:
-            logger.info(f"Published datasource: {ds_item.name}")
-            return published_ds
-        
-        logger.error(f"Failed to verify publication of {ds_item.name}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Failed to publish datasource {ds_item.name}: {str(e)}")
-        return None
-
-def publish_workbook(server: TSC.Server, wb_item: TSC.WorkbookItem, 
-                    file_path: str, project_id: str) -> Optional[TSC.WorkbookItem]:
-    """Publish a workbook to Tableau Server with comprehensive error handling."""
-    try:
-        new_item = TSC.WorkbookItem(
-            name=wb_item.name, 
-            project_id=project_id,
-            show_tabs=getattr(wb_item, 'show_tabs', False),
-            description=getattr(wb_item, 'description', None) or f"Migrated on {time.strftime('%Y-%m-%d')}"
-        )
-        
-        published_wb = server.workbooks.publish(
-            new_item,
-            file_path,
-            mode=TSC.Server.PublishMode.Overwrite,
-            as_job=False
-        )
-        
-        if published_wb:
-            logger.info(f"Published workbook: {wb_item.name}")
-            return published_wb
-        
-        logger.error(f"Failed to verify publication of {wb_item.name}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Failed to publish workbook {wb_item.name}: {str(e)}")
-        if "failed to establish a connection" in str(e).lower():
-            logger.warning("This workbook may reference datasources that weren't migrated successfully")
-        return None
 
 # --------------------------
 # User and Group Migration
 # --------------------------
 def migrate_users(src_server: TSC.Server, dest_server: TSC.Server) -> Dict[str, TSC.UserItem]:
-    """Migrate users from source to destination server with comprehensive mapping."""
-    logger.info("Starting user migration")
-    user_map = {}
-    
+    """Migrate users from source to destination server."""
+    st.subheader("👤 Migrating Users")
     try:
         src_users = list(TSC.Pager(src_server.users))
         dest_users = list(TSC.Pager(dest_server.users))
         
+        src_user_map = {u.name.lower(): u for u in src_users}
         dest_user_map = {u.name.lower(): u for u in dest_users}
+        
         migrated_users = 0
         skipped_users = 0
         
@@ -216,93 +93,89 @@ def migrate_users(src_server: TSC.Server, dest_server: TSC.Server) -> Dict[str, 
                 try:
                     new_user = TSC.UserItem(
                         name=user.name,
-                        site_role=user.site_role,
-                        email=getattr(user, 'email', None),
-                        fullname=getattr(user, 'fullname', None)
+                        site_role=user.site_role
                     )
+                    # Add email if available
+                    if hasattr(user, 'email'):
+                        new_user.email = user.email
                     
                     created_user = dest_server.users.add(new_user)
                     dest_user_map[user.name.lower()] = created_user
-                    user_map[user.name.lower()] = created_user
+                    st.success(f"✅ Created user: {user.name}")
                     migrated_users += 1
-                    logger.info(f"Created user: {user.name}")
                 except Exception as e:
-                    logger.error(f"Failed to create user {user.name}: {str(e)}")
+                    st.error(f"❌ Failed to create user {user.name}: {str(e)}")
                     skipped_users += 1
             else:
-                user_map[user.name.lower()] = dest_user_map[user.name.lower()]
+                st.info(f"ℹ️ User already exists: {user.name}")
                 skipped_users += 1
-                logger.info(f"User already exists: {user.name}")
         
-        logger.info(f"User migration complete: {migrated_users} migrated, {skipped_users} skipped")
-        return user_map
-        
+        st.info(f"ℹ️ User migration summary: {migrated_users} migrated, {skipped_users} skipped")
+        return dest_user_map
     except Exception as e:
-        logger.error(f"User migration failed: {str(e)}")
+        st.error(f"❌ Failed to migrate users: {str(e)}")
         raise
 
-def migrate_groups(src_server: TSC.Server, dest_server: TSC.Server, 
-                  user_map: Dict[str, TSC.UserItem]) -> Dict[str, TSC.GroupItem]:
-    """Migrate groups and memberships with name-based matching."""
-    logger.info("Starting group migration")
-    group_map = {}
-    
+def migrate_groups(src_server: TSC.Server, dest_server: TSC.Server, user_map: Dict[str, TSC.UserItem]) -> Dict[str, TSC.GroupItem]:
+    """Migrate groups and their memberships from source to destination server using group names."""
+    st.subheader("👥 Migrating Groups")
     try:
         src_groups = list(TSC.Pager(src_server.groups))
         dest_groups = list(TSC.Pager(dest_server.groups))
         
+        # Create maps by lowercase names
+        src_group_map = {g.name.lower(): g for g in src_groups}
         dest_group_map = {g.name.lower(): g for g in dest_groups}
+        
         migrated_groups = 0
         skipped_groups = 0
         
-        # Create missing groups
-        for group in src_groups:
-            if group.name.lower() not in dest_group_map:
+        # First create all groups that don't exist
+        for group_name, src_group in src_group_map.items():
+            if group_name not in dest_group_map:
                 try:
-                    new_group = TSC.GroupItem(group.name)
+                    new_group = TSC.GroupItem(src_group.name)
                     created_group = dest_server.groups.create(new_group)
-                    dest_group_map[group.name.lower()] = created_group
-                    group_map[group.name.lower()] = created_group
+                    dest_group_map[group_name] = created_group
+                    st.success(f"✅ Created group: {src_group.name}")
                     migrated_groups += 1
-                    logger.info(f"Created group: {group.name}")
                 except Exception as e:
-                    logger.error(f"Failed to create group {group.name}: {str(e)}")
+                    st.error(f"❌ Failed to create group {src_group.name}: {str(e)}")
                     skipped_groups += 1
             else:
-                group_map[group.name.lower()] = dest_group_map[group.name.lower()]
+                st.info(f"ℹ️ Group already exists: {src_group.name}")
                 skipped_groups += 1
-                logger.info(f"Group already exists: {group.name}")
         
-        # Populate memberships
-        logger.info("Starting group membership migration")
-        for group_name, group in group_map.items():
-            src_group = next((g for g in src_groups if g.name.lower() == group_name), None)
-            if not src_group:
-                continue
+        # Then populate group memberships
+        st.subheader("👥➡👤 Migrating Group Memberships")
+        for group_name, src_group in src_group_map.items():
+            if group_name in dest_group_map:
+                dest_group = dest_group_map[group_name]
                 
-            src_server.groups.populate_users(src_group)
-            if not hasattr(src_group, 'users'):
-                continue
+                # Get source group members
+                src_server.groups.populate_users(src_group)
+                if not hasattr(src_group, 'users'):
+                    continue
+                    
+                added_members = 0
+                for user in src_group.users:
+                    if user.name.lower() in user_map:
+                        try:
+                            dest_user = user_map[user.name.lower()]
+                            dest_server.groups.add_user(dest_group.id, dest_user.id)
+                            st.success(f"✅ Added user {user.name} to group {src_group.name}")
+                            added_members += 1
+                        except Exception as e:
+                            st.error(f"❌ Failed to add user {user.name} to group {src_group.name}: {str(e)}")
+                    else:
+                        st.warning(f"⚠️ User not found in destination: {user.name}")
                 
-            added_members = 0
-            for user in src_group.users:
-                if user.name.lower() in user_map:
-                    try:
-                        dest_server.groups.add_user(group.id, user_map[user.name.lower()].id)
-                        added_members += 1
-                        logger.info(f"Added user {user.name} to group {group.name}")
-                    except Exception as e:
-                        logger.error(f"Failed to add user {user.name} to group {group.name}: {str(e)}")
-                else:
-                    logger.warning(f"User not found in destination: {user.name}")
-            
-            logger.info(f"Added {added_members} members to group {group.name}")
+                st.info(f"ℹ️ Added {added_members} members to group {src_group.name}")
         
-        logger.info(f"Group migration complete: {migrated_groups} migrated, {skipped_groups} skipped")
-        return group_map
-        
+        st.info(f"ℹ️ Group migration summary: {migrated_groups} migrated, {skipped_groups} skipped")
+        return dest_group_map
     except Exception as e:
-        logger.error(f"Group migration failed: {str(e)}")
+        st.error(f"❌ Failed to migrate groups: {str(e)}")
         raise
 
 # --------------------------
@@ -315,10 +188,11 @@ def migrate_permissions(
     dest_item,
     item_type: str,
     user_map: Dict[str, TSC.UserItem],
-    group_map: Optional[Dict[str, TSC.GroupItem]] = None
-) -> bool:
-    """Migrate permissions with comprehensive error handling."""
+    group_map: Dict[str, TSC.GroupItem] = None
+):
+    """Migrate permissions from source to destination item with group name handling."""
     try:
+        # Get source permissions
         if item_type == 'workbook':
             src_server.workbooks.populate_permissions(src_item)
             permissions = src_item.permissions
@@ -326,45 +200,53 @@ def migrate_permissions(
             src_server.datasources.populate_permissions(src_item)
             permissions = src_item.permissions
         else:
-            return False
+            return
 
         if not permissions:
-            logger.info(f"No permissions to migrate for {item_type} {src_item.name}")
-            return True
+            st.info(f"ℹ️ No permissions to migrate for {item_type} {src_item.name}")
+            return
 
+        # Prepare new permissions
         new_permissions = []
         for rule in permissions:
             grantee_type = rule.grantee.tag_name
             capabilities = rule.capabilities
 
+            # Map user/group if needed
             if grantee_type == 'user':
                 if rule.grantee.name.lower() in user_map:
                     grantee = TSC.UserItem.as_reference(user_map[rule.grantee.name.lower()].id)
                 else:
-                    logger.warning(f"User {rule.grantee.name} not found, skipping permission")
+                    st.warning(f"⚠️ User {rule.grantee.name} not found in destination, skipping permission")
                     continue
             elif grantee_type == 'group':
+                # Handle group by name instead of ID
                 if group_map and rule.grantee.name.lower() in group_map:
                     grantee = TSC.GroupItem.as_reference(group_map[rule.grantee.name.lower()].id)
                 else:
-                    logger.warning(f"Group {rule.grantee.name} not found, skipping permission")
+                    st.warning(f"⚠️ Group {rule.grantee.name} not found in destination, skipping permission")
                     continue
             else:
                 continue
 
-            new_permissions.append(TSC.PermissionsRule(grantee=grantee, capabilities=capabilities))
+            new_permissions.append(
+                TSC.PermissionsRule(
+                    grantee=grantee,
+                    capabilities=capabilities
+                )
+            )
 
+        # Apply permissions
         if item_type == 'workbook':
             dest_server.workbooks.update_permissions(dest_item, new_permissions)
         elif item_type == 'datasource':
             dest_server.datasources.update_permissions(dest_item, new_permissions)
 
-        logger.info(f"Migrated permissions for {item_type} {src_item.name}")
-        return True
-        
+        st.success(f"✅ Migrated permissions for {item_type} {src_item.name}")
+
     except Exception as e:
-        logger.error(f"Failed to migrate permissions for {item_type} {src_item.name}: {str(e)}")
-        return False
+        st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {str(e)}")
+        raise
 
 # --------------------------
 # Schedule Migration
@@ -376,26 +258,27 @@ def migrate_extract_schedules(
     dest_item,
     item_type: str,
     project_id: str
-) -> bool:
-    """Migrate extract refresh schedules with improved error handling."""
+):
+    """Migrate extract refresh schedules from source to destination item."""
     try:
+        # Get source schedules using the correct endpoint
         if item_type == 'workbook':
             schedules = src_server.schedules.get_by_workbook(src_item.id)
         elif item_type == 'datasource':
             schedules = src_server.schedules.get_by_datasource(src_item.id)
         else:
-            return False
+            return
 
         if not schedules:
-            logger.info(f"No extract schedules to migrate for {item_type} {src_item.name}")
-            return True
+            st.info(f"ℹ️ No extract schedules to migrate for {item_type} {src_item.name}")
+            return
 
-        dest_schedules = {s.name.lower(): s for s in list(TSC.Pager(dest_server.schedules))}
-        created_schedules = 0
-
+        # Create destination schedules
         for schedule in schedules:
-            if schedule.name.lower() in dest_schedules:
-                logger.info(f"Schedule {schedule.name} already exists")
+            # Skip if schedule already exists on destination
+            dest_schedules = list(TSC.Pager(dest_server.schedules))
+            if any(s.name.lower() == schedule.name.lower() for s in dest_schedules):
+                st.info(f"ℹ️ Schedule {schedule.name} already exists on destination")
                 continue
 
             new_schedule = TSC.ScheduleItem(
@@ -406,446 +289,429 @@ def migrate_extract_schedules(
                 state=schedule.state
             )
 
-            # Copy schedule details based on frequency
-            freq_attr = f"{schedule.frequency.lower()}_schedule"
-            if hasattr(schedule, freq_attr):
-                setattr(new_schedule, freq_attr, getattr(schedule, freq_attr))
+            # Set time details based on frequency
+            if schedule.frequency == 'Hourly':
+                new_schedule.hourly_schedule = schedule.hourly_schedule
+            elif schedule.frequency == 'Daily':
+                new_schedule.daily_schedule = schedule.daily_schedule
+            elif schedule.frequency == 'Weekly':
+                new_schedule.weekly_schedule = schedule.weekly_schedule
+            elif schedule.frequency == 'Monthly':
+                new_schedule.monthly_schedule = schedule.monthly_schedule
 
+            # Create schedule on destination
             try:
                 created_schedule = dest_server.schedules.create(new_schedule)
-                created_schedules += 1
                 
+                # Assign schedule to item
                 if item_type == 'workbook':
                     dest_server.workbooks.schedule_extract_refresh(dest_item.id, created_schedule.id)
                 elif item_type == 'datasource':
                     dest_server.datasources.schedule_extract_refresh(dest_item.id, created_schedule.id)
                 
-                logger.info(f"Created schedule {schedule.name} for {item_type} {src_item.name}")
+                st.success(f"✅ Created schedule {schedule.name} for {item_type} {src_item.name}")
             except Exception as e:
-                logger.error(f"Failed to create schedule {schedule.name}: {str(e)}")
+                st.error(f"❌ Failed to create schedule {schedule.name}: {str(e)}")
 
-        logger.info(f"Created {created_schedules} schedules for {item_type} {src_item.name}")
-        return created_schedules > 0
-        
     except Exception as e:
-        logger.error(f"Failed to migrate schedules for {item_type} {src_item.name}: {str(e)}")
-        return False
+        st.error(f"❌ Failed to migrate schedules for {item_type} {src_item.name}: {str(e)}")
+        raise
 # --------------------------
-# Streamlit UI Configuration
+# Content Download Functions
 # --------------------------
-def configure_streamlit_ui():
-    """Set up the Streamlit page configuration."""
-    st.set_page_config(
-        page_title="Tableau Migration Tool",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+def download_content(server: TSC.Server, project_id: str, project_name: str, content_type: str) -> List:
+    """Download content (workbooks/datasources) from Tableau Server."""
+    dirs = create_local_dirs(project_name)
+    downloaded_files = []
     
-    st.markdown("""
-        <style>
-        .main { padding-top: 2rem; }
-        .stButton>button { width: 100%; }
-        .stProgress > div > div > div { background-color: #4B8BBE; }
-        .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
-        </style>
-    """, unsafe_allow_html=True)
+    try:
+        if content_type == "workbook":
+            items = list(TSC.Pager(server.workbooks))
+            for item in items:
+                if item.project_id == project_id:
+                    path = os.path.join(dirs['workbooks'], f"{sanitize(item.name)}.twbx")
+                    try:
+                        file_path = server.workbooks.download(item.id, filepath=path, include_extract=True)
+                        if os.path.exists(file_path):
+                            downloaded_files.append((item, file_path, 'workbook'))
+                            st.success(f"✅ Downloaded workbook: {item.name}")
+                        else:
+                            st.error(f"❌ Workbook not saved: {item.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to download workbook {item.name}: {str(e)}")
+        
+        elif content_type == "datasource":
+            items = list(TSC.Pager(server.datasources))
+            for item in items:
+                if item.project_id == project_id:
+                    path = os.path.join(dirs['datasources'], f"{sanitize(item.name)}.tdsx")
+                    try:
+                        file_path = server.datasources.download(item.id, filepath=path, include_extract=True)
+                        if os.path.exists(file_path):
+                            downloaded_files.append((item, file_path, 'datasource'))
+                            st.success(f"✅ Downloaded datasource: {item.name}")
+                        else:
+                            st.error(f"❌ Datasource not saved: {item.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to download datasource {item.name}: {str(e)}")
+        
+        elif content_type == "custom_view":
+            items = list(TSC.Pager(server.views))
+            for item in items:
+                if hasattr(item, 'workbook') and item.workbook.project_id == project_id:
+                    path = os.path.join(dirs['views'], f"{sanitize(item.name)}.tvc")
+                    try:
+                        view_data = {
+                            'name': item.name,
+                            'workbook_name': item.workbook.name,
+                            'owner_name': item.owner.name if hasattr(item, 'owner') else None,
+                            'view_data': item._view_data if hasattr(item, '_view_data') else None
+                        }
+                        downloaded_files.append((view_data, path, 'custom_view'))
+                        st.success(f"✅ Captured custom view: {item.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to capture custom view {item.name}: {str(e)}")
+    except Exception as e:
+        st.error(f"❌ Error getting {content_type} list: {str(e)}")
     
-    st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🔁 Tableau Content Migration Tool</h1>", 
-                unsafe_allow_html=True)
+    return downloaded_files
 
 # --------------------------
-# Migration Form
+# Content Publishing Functions
 # --------------------------
-def show_migration_form() -> Dict:
-    """Display and process the migration configuration form."""
-    with st.form("migration_form"):
-        form_data = {}
+def publish_datasource(server: TSC.Server, ds_item: TSC.DatasourceItem, file_path: str, project_id: str) -> TSC.DatasourceItem:
+    """Publish a datasource to Tableau Server."""
+    try:
+        new_item = TSC.DatasourceItem(name=ds_item.name, project_id=project_id)
+        published_ds = server.datasources.publish(
+            new_item,
+            file_path,
+            mode=TSC.Server.PublishMode.Overwrite,
+            as_job=False
+        )
         
-        # Source Server Configuration
+        # Verify publication
+        if published_ds:
+            st.success(f"✅ Published datasource: {ds_item.name}")
+            return published_ds
+        else:
+            st.error(f"❌ Failed to verify publication of {ds_item.name}")
+            return None
+    except Exception as e:
+        st.error(f"❌ Failed to publish datasource {ds_item.name}: {str(e)}")
+        return None
+
+def publish_workbook(server: TSC.Server, wb_item: TSC.WorkbookItem, file_path: str, project_id: str) -> TSC.WorkbookItem:
+    """Publish a workbook to Tableau Server."""
+    try:
+        new_item = TSC.WorkbookItem(name=wb_item.name, project_id=project_id)
+        published_wb = server.workbooks.publish(
+            new_item,
+            file_path,
+            mode=TSC.Server.PublishMode.Overwrite,
+            as_job=False
+            # Removed include_extract as it's not supported in newer versions
+        )
+        
+        # Verify publication
+        if published_wb:
+            st.success(f"✅ Published workbook: {wb_item.name}")
+            return published_wb
+        else:
+            st.error(f"❌ Failed to verify publication of {wb_item.name}")
+            return None
+    except Exception as e:
+        st.error(f"❌ Failed to publish workbook {wb_item.name}: {str(e)}")
+        if "failed to establish a connection" in str(e).lower():
+            st.warning("⚠️ This workbook may reference datasources that weren't migrated successfully")
+            st.warning("Try publishing the dependent datasources first or check connection settings")
+        return None
+
+def publish_content_in_sequence(
+    src_server: TSC.Server,
+    dest_server: TSC.Server,
+    downloaded_items: List,
+    dest_project_id: str,
+    migrate_schedules: bool,
+    user_map: Dict[str, TSC.UserItem]
+) -> None:
+    """Publish content in proper sequence (datasources first, then workbooks)."""
+    # Separate content types
+    datasources = [item for item in downloaded_items if item[2] == 'datasource']
+    workbooks = [item for item in downloaded_items if item[2] == 'workbook']
+    
+    published_ds = {}
+    published_wb = {}
+    
+    # Publish all datasources first
+    st.subheader("📊 Publishing Data Sources")
+    for ds_item, path, _ in datasources:
+        published_datasource = publish_datasource(dest_server, ds_item, path, dest_project_id)
+        if published_datasource:
+            published_ds[ds_item.name] = published_datasource
+            
+            # Migrate permissions
+            try:
+                src_server.datasources.populate_permissions(ds_item)
+                migrate_permissions(src_server, ds_item, dest_server, published_datasource, 'datasource', user_map)
+            except Exception as e:
+                st.error(f"❌ Failed to migrate permissions for datasource {ds_item.name}: {str(e)}")
+            
+            # Migrate schedules if enabled
+            if migrate_schedules:
+                try:
+                    migrate_extract_schedules(
+                        src_server, 
+                        dest_server, 
+                        ds_item, 
+                        published_datasource, 
+                        'datasource', 
+                        dest_project_id
+                    )
+                except Exception as e:
+                    st.error(f"❌ Failed to migrate schedules for datasource {ds_item.name}: {str(e)}")
+            
+            time.sleep(2)  # Delay to avoid rate limiting
+    
+    # Publish workbooks after datasources are available
+    st.subheader("📚 Publishing Workbooks")
+    for wb_item, path, _ in workbooks:
+        published_workbook = publish_workbook(dest_server, wb_item, path, dest_project_id)
+        if published_workbook:
+            published_wb[wb_item.name] = published_workbook
+            
+            # Migrate permissions
+            try:
+                src_server.workbooks.populate_permissions(wb_item)
+                migrate_permissions(src_server, wb_item, dest_server, published_workbook, 'workbook', user_map)
+            except Exception as e:
+                st.error(f"❌ Failed to migrate permissions for workbook {wb_item.name}: {str(e)}")
+            
+            # Migrate schedules if enabled
+            if migrate_schedules:
+                try:
+                    migrate_extract_schedules(
+                        src_server, 
+                        dest_server, 
+                        wb_item, 
+                        published_workbook, 
+                        'workbook', 
+                        dest_project_id
+                    )
+                except Exception as e:
+                    st.error(f"❌ Failed to migrate schedules for workbook {wb_item.name}: {str(e)}")
+            
+            time.sleep(2)  # Delay to avoid rate limiting
+
+# --------------------------
+# Main Application
+# --------------------------
+def main():
+    with st.form("migration_form"):
         st.subheader("🔐 Source Server Configuration")
         col1, col2 = st.columns(2)
         
         with col1:
-            form_data['src_auth_method'] = st.radio(
-                "Authentication Method", 
-                ["PAT", "Username/Password"], 
-                key="src_auth"
-            )
-            form_data['src_server_url'] = st.text_input(
-                "Source Server URL", 
-                help="e.g., https://server.tableau.com"
-            )
-            form_data['src_site'] = st.text_input(
-                "Source Site ID", 
-                value="", 
-                help="Leave empty for default site"
-            )
+            src_auth_method = st.radio("Authentication Method", ["PAT", "Username/Password"], key="src_auth")
+            src_server_url = st.text_input("Source Server URL", help="e.g., https://server.tableau.com")
+            src_site = st.text_input("Source Site ID", value="", help="Leave empty for default site")
         
         with col2:
-            if form_data['src_auth_method'] == "PAT":
-                form_data['src_token_name'] = st.text_input("Source Personal Access Token Name")
-                form_data['src_token_value'] = st.text_input(
-                    "Source Personal Access Token Value", 
-                    type="password"
-                )
+            if src_auth_method == "PAT":
+                src_token_name = st.text_input("Source Personal Access Token Name")
+                src_token_value = st.text_input("Source Personal Access Token Value", type="password")
             else:
-                form_data['src_username'] = st.text_input("Source Username")
-                form_data['src_password'] = st.text_input("Source Password", type="password")
+                src_username = st.text_input("Source Username")
+                src_password = st.text_input("Source Password", type="password")
         
-        # Destination Server Configuration
         st.subheader("🔐 Destination Server Configuration")
         col3, col4 = st.columns(2)
         
         with col3:
-            form_data['dest_auth_method'] = st.radio(
-                "Authentication Method", 
-                ["PAT", "Username/Password"], 
-                key="dest_auth"
-            )
-            form_data['dest_server_url'] = st.text_input(
-                "Destination Server URL", 
-                help="e.g., https://server.tableau.com"
-            )
-            form_data['dest_site'] = st.text_input(
-                "Destination Site ID", 
-                value="", 
-                help="Leave empty for default site"
-            )
+            dest_auth_method = st.radio("Authentication Method", ["PAT", "Username/Password"], key="dest_auth")
+            dest_server_url = st.text_input("Destination Server URL", help="e.g., https://server.tableau.com")
+            dest_site = st.text_input("Destination Site ID", value="", help="Leave empty for default site")
         
         with col4:
-            if form_data['dest_auth_method'] == "PAT":
-                form_data['dest_token_name'] = st.text_input("Destination Personal Access Token Name")
-                form_data['dest_token_value'] = st.text_input(
-                    "Destination Personal Access Token Value", 
-                    type="password"
-                )
+            if dest_auth_method == "PAT":
+                dest_token_name = st.text_input("Destination Personal Access Token Name")
+                dest_token_value = st.text_input("Destination Personal Access Token Value", type="password")
             else:
-                form_data['dest_username'] = st.text_input("Destination Username")
-                form_data['dest_password'] = st.text_input("Destination Password", type="password")
+                dest_username = st.text_input("Destination Username")
+                dest_password = st.text_input("Destination Password", type="password")
         
-        # Migration Settings
         st.subheader("📂 Migration Settings")
-        form_data['src_project_name'] = st.text_input(
-            "Source Project Name", 
-            help="Name of the project to migrate from"
-        )
-        form_data['dest_project_name'] = st.text_input(
-            "Destination Project Name", 
-            help="Name of the project to migrate to"
-        )
+        src_project_name = st.text_input("Source Project Name", help="Name of the project to migrate from")
+        dest_project_name = st.text_input("Destination Project Name", help="Name of the project to migrate to")
         
-        # User and Group Migration
         st.subheader("👥 User and Group Migration")
-        form_data['migrate_users_groups'] = st.checkbox(
-            "Enable User and Group Migration", 
-            value=True
-        )
+        migrate_users_groups = st.checkbox("Enable User and Group Migration", value=True)
         
-        if form_data['migrate_users_groups']:
+        if migrate_users_groups:
             col5, col6 = st.columns(2)
             with col5:
-                form_data['migrate_users_flag'] = st.checkbox("Migrate Users", value=True)
+                migrate_users_flag = st.checkbox("Migrate Users", value=True)
             with col6:
-                form_data['migrate_groups_flag'] = st.checkbox("Migrate Groups", value=True)
+                migrate_groups_flag = st.checkbox("Migrate Groups", value=True)
         
-        # Content Selection
         st.subheader("📦 Content to Migrate")
-        form_data['content_types'] = st.multiselect(
+        content_types = st.multiselect(
             "Select content types to migrate",
-            ["Workbooks", "Data Sources", "Custom Views"],
+            ["Workbooks", "Data Sources", "Custom Views", "Subscriptions"],
             default=["Workbooks", "Data Sources"]
         )
         
-        # Extract Refresh Settings
         st.subheader("⏱️ Extract Refresh Settings")
-        form_data['migrate_schedules_flag'] = st.checkbox(
+        migrate_schedules_flag = st.checkbox(
             "Migrate extract refresh schedules", 
             value=True,
             help="Enable to migrate extract refresh schedules along with content"
         )
         
-        # Submit Button
-        form_data['submitted'] = st.form_submit_button("🚀 Start Migration")
-        
-        return form_data
+        submitted = st.form_submit_button("🚀 Start Migration")
 
-# --------------------------
-# Migration Progress Tracking
-# --------------------------
-def track_migration_progress(step: int, total_steps: int, message: str):
-    """Display migration progress with a progress bar."""
-    progress = step / total_steps
-    st.progress(progress)
-    st.info(f"Step {step} of {total_steps}: {message}")
-
-# --------------------------
-# Main Migration Controller
-# --------------------------
-def execute_migration(form_data: Dict):
-    """Orchestrate the entire migration process."""
-    if not form_data['submitted']:
-        return
-    
-    # Validate inputs
-    required_fields = [
-        'src_server_url', 'dest_server_url', 
-        'src_project_name', 'dest_project_name'
-    ]
-    
-    if not all(form_data.get(field) for field in required_fields):
-        st.error("Please fill in all required fields")
-        return
-    
-    if not form_data.get('content_types'):
-        st.error("Please select at least one content type to migrate")
-        return
-    
-    try:
-        # Setup authentication
-        src_auth = get_auth(
-            form_data['src_auth_method'],
-            form_data.get('src_token_name'),
-            form_data.get('src_token_value'),
-            form_data.get('src_username'),
-            form_data.get('src_password'),
-            form_data['src_site']
-        )
-        
-        dest_auth = get_auth(
-            form_data['dest_auth_method'],
-            form_data.get('dest_token_name'),
-            form_data.get('dest_token_value'),
-            form_data.get('dest_username'),
-            form_data.get('dest_password'),
-            form_data['dest_site']
-        )
-        
-        # Initialize servers
-        src_server = get_server(form_data['src_server_url'])
-        dest_server = get_server(form_data['dest_server_url'])
-        
-        with st.spinner("Initializing migration..."):
-            # Connect to source server
+    if submitted:
+        try:
+            # Validate inputs
+            if not all([src_server_url, dest_server_url, src_project_name, dest_project_name]):
+                st.error("Please fill in all required fields")
+                return
+            
+            if not content_types:
+                st.error("Please select at least one content type to migrate")
+                return
+            
+            # Authenticate to source server
+            src_auth = get_auth(
+                src_auth_method,
+                src_token_name if src_auth_method == "PAT" else None,
+                src_token_value if src_auth_method == "PAT" else None,
+                src_username if src_auth_method != "PAT" else None,
+                src_password if src_auth_method != "PAT" else None,
+                src_site
+            )
+            
+            src_server = get_server(src_server_url)
             with src_server.auth.sign_in(src_auth):
                 st.success("🔓 Successfully connected to source server")
                 
                 # Get source project
                 try:
                     projects = list(TSC.Pager(src_server.projects))
-                    src_project = next(
-                        (p for p in projects if p.name == form_data['src_project_name']), 
-                        None
-                    )
+                    src_project = next((p for p in projects if p.name == src_project_name), None)
                     
                     if not src_project:
-                        st.error(f"❌ Source project '{form_data['src_project_name']}' not found")
+                        st.error(f"❌ Source project '{src_project_name}' not found")
                         return
                 except Exception as e:
                     st.error(f"❌ Failed to get source project: {str(e)}")
                     return
                 
-                # Connect to destination server
+                # Authenticate to destination server
+                dest_auth = get_auth(
+                    dest_auth_method,
+                    dest_token_name if dest_auth_method == "PAT" else None,
+                    dest_token_value if dest_auth_method == "PAT" else None,
+                    dest_username if dest_auth_method != "PAT" else None,
+                    dest_password if dest_auth_method != "PAT" else None,
+                    dest_site
+                )
+                
+                dest_server = get_server(dest_server_url)
                 with dest_server.auth.sign_in(dest_auth):
                     st.success("🔓 Successfully connected to destination server")
-                    
-                    # Initialize progress tracking
-                    total_steps = 3  # Base steps
-                    if form_data.get('migrate_users_groups'):
-                        total_steps += 2
-                    if "Data Sources" in form_data['content_types']:
-                        total_steps += 2
-                    if "Workbooks" in form_data['content_types']:
-                        total_steps += 2
-                    
-                    current_step = 1
                     
                     # Migrate users and groups first if enabled
                     user_map = {}
                     group_map = {}
-                    
-                    if form_data.get('migrate_users_groups') and form_data.get('migrate_users_flag'):
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Migrating users from source to destination"
-                        )
-                        current_step += 1
-                        
+                    if migrate_users_groups and migrate_users_flag:
                         try:
                             user_map = migrate_users(src_server, dest_server)
-                            st.success("✅ User migration completed")
                         except Exception as e:
                             st.error(f"❌ User migration failed: {str(e)}")
-                            if not st.checkbox("Continue without user migration?"):
+                            if "continue without users" not in st.session_state:
+                                if st.button("Continue without user migration?"):
+                                    st.session_state["continue without users"] = True
                                 return
                     
-                    if (form_data.get('migrate_users_groups') and 
-                        form_data.get('migrate_groups_flag') and 
-                        user_map):
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Migrating groups and memberships"
-                        )
-                        current_step += 1
-                        
+                    if migrate_users_groups and migrate_groups_flag and user_map:
                         try:
                             group_map = migrate_groups(src_server, dest_server, user_map)
-                            st.success("✅ Group migration completed")
                         except Exception as e:
                             st.error(f"❌ Group migration failed: {str(e)}")
-                            if not st.checkbox("Continue without group migration?"):
+                            if "continue without groups" not in st.session_state:
+                                if st.button("Continue without group migration?"):
+                                    st.session_state["continue without groups"] = True
                                 return
                     
                     # Get or create destination project
-                    track_migration_progress(
-                        current_step, total_steps, 
-                        "Setting up destination project"
-                    )
-                    current_step += 1
-                    
                     try:
-                        dest_project = get_or_create_project(
-                            dest_server, 
-                            form_data['dest_project_name']
-                        )
+                        dest_project = get_or_create_project(dest_server, dest_project_name)
                     except Exception as e:
                         st.error(f"❌ Failed to setup destination project: {str(e)}")
                         return
                     
-                    # Download and publish content
+                    # Download content in proper sequence
                     downloaded_items = []
                     
-                    if "Data Sources" in form_data['content_types']:
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Downloading data sources from source"
-                        )
-                        current_step += 1
-                        
+                    if "Data Sources" in content_types:
+                        st.subheader("📥 Downloading Data Sources")
                         try:
-                            ds_items = download_content(
-                                src_server, 
-                                src_project.id, 
-                                form_data['src_project_name'], 
-                                "datasource"
-                            )
+                            ds_items = download_content(src_server, src_project.id, src_project_name, "datasource")
                             downloaded_items.extend(ds_items)
-                            st.success(f"✅ Downloaded {len(ds_items)} data sources")
                         except Exception as e:
                             st.error(f"❌ Failed to download datasources: {str(e)}")
-                            if not st.checkbox("Continue without datasources?"):
+                            if "continue without datasources" not in st.session_state:
+                                if st.button("Continue without datasources?"):
+                                    st.session_state["continue without datasources"] = True
                                 return
                     
-                    if "Workbooks" in form_data['content_types']:
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Downloading workbooks from source"
-                        )
-                        current_step += 1
-                        
+                    if "Workbooks" in content_types:
+                        st.subheader("📥 Downloading Workbooks")
                         try:
-                            wb_items = download_content(
-                                src_server, 
-                                src_project.id, 
-                                form_data['src_project_name'], 
-                                "workbook"
-                            )
+                            wb_items = download_content(src_server, src_project.id, src_project_name, "workbook")
                             downloaded_items.extend(wb_items)
-                            st.success(f"✅ Downloaded {len(wb_items)} workbooks")
                         except Exception as e:
                             st.error(f"❌ Failed to download workbooks: {str(e)}")
-                            if not st.checkbox("Continue without workbooks?"):
+                            if "continue without workbooks" not in st.session_state:
+                                if st.button("Continue without workbooks?"):
+                                    st.session_state["continue without workbooks"] = True
                                 return
                     
-                    if "Custom Views" in form_data['content_types']:
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Capturing custom views from source"
-                        )
-                        current_step += 1
-                        
+                    if "Custom Views" in content_types:
+                        st.subheader("📥 Capturing Custom Views")
                         try:
-                            view_items = download_content(
-                                src_server, 
-                                src_project.id, 
-                                form_data['src_project_name'], 
-                                "custom_view"
-                            )
+                            view_items = download_content(src_server, src_project.id, src_project_name, "custom_view")
                             downloaded_items.extend(view_items)
-                            st.success(f"✅ Captured {len(view_items)} custom views")
                         except Exception as e:
                             st.error(f"❌ Failed to capture custom views: {str(e)}")
                     
-                    # Publish content
+                    # Publish content in proper sequence (datasources first)
                     if downloaded_items:
-                        track_migration_progress(
-                            current_step, total_steps, 
-                            "Publishing content to destination"
-                        )
-                        current_step += 1
-                        
                         try:
-                            # Separate content types
-                            datasources = [item for item in downloaded_items if item[2] == 'datasource']
-                            workbooks = [item for item in downloaded_items if item[2] == 'workbook']
-                            
-                            # Publish datasources first
-                            for ds_item, path, _ in datasources:
-                                published_ds = publish_datasource(
-                                    dest_server, 
-                                    ds_item, 
-                                    path, 
-                                    dest_project.id
-                                )
-                                if published_ds:
-                                    if form_data['migrate_schedules_flag']:
-                                        migrate_extract_schedules(
-                                            src_server, 
-                                            dest_server, 
-                                            ds_item, 
-                                            published_ds, 
-                                            'datasource', 
-                                            dest_project.id
-                                        )
-                            
-                            # Then publish workbooks
-                            for wb_item, path, _ in workbooks:
-                                published_wb = publish_workbook(
-                                    dest_server, 
-                                    wb_item, 
-                                    path, 
-                                    dest_project.id
-                                )
-                                if published_wb:
-                                    if form_data['migrate_schedules_flag']:
-                                        migrate_extract_schedules(
-                                            src_server, 
-                                            dest_server, 
-                                            wb_item, 
-                                            published_wb, 
-                                            'workbook', 
-                                            dest_project.id
-                                        )
-                            
+                            publish_content_in_sequence(
+                                src_server,
+                                dest_server,
+                                downloaded_items,
+                                dest_project.id,
+                                migrate_schedules_flag,
+                                user_map
+                            )
                             st.balloons()
                             st.success("🎉 Migration completed successfully!")
                         except Exception as e:
                             st.error(f"❌ Failed during content publishing: {str(e)}")
                     else:
                         st.warning("⚠️ No content was downloaded for migration")
-    
-    except Exception as e:
-        st.error(f"❌ Migration failed: {str(e)}")
-        logger.exception("Migration error")
+        
+        except Exception as e:
+            st.error(f"❌ Migration failed: {str(e)}")
+            logger.exception("Migration error")
 
-# --------------------------
-# Main Application
-# --------------------------
-def main():
-    configure_streamlit_ui()
-    form_data = show_migration_form()
-    execute_migration(form_data)
-    
     st.markdown("""
+        <style>
+        .footer { text-align: center; margin-top: 40px; color: #888; font-size: 16px; }
+        </style>
         <div class="footer">Developed by <strong>Mohd Sajjad</strong></div>
     """, unsafe_allow_html=True)
 
