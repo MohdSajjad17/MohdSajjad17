@@ -251,70 +251,81 @@ def migrate_permissions(
 # --------------------------
 # Schedule Migration
 # --------------------------
-def migrate_extract_schedules(
+def migrate_all_extract_schedules(
     src_server: TSC.Server,
-    dest_server: TSC.Server,
-    src_item,
-    dest_item,
-    item_type: str,
-    project_id: str
+    dest_server: TSC.Server
 ):
-    """Migrate extract refresh schedules from source to destination item."""
+    """Migrate all extract refresh schedules from source to destination server."""
     try:
-        # Get source schedules using the correct endpoint
-        if item_type == 'workbook':
-            schedules = src_server.schedules.get_by_workbook(src_item.id)
-        elif item_type == 'datasource':
-            schedules = src_server.schedules.get_by_datasource(src_item.id)
-        else:
+        # Get all schedules from source server
+        all_schedules = list(TSC.Pager(src_server.schedules))
+        
+        if not all_schedules:
+            st.info("ℹ️ No extract schedules found on source server")
             return
 
-        if not schedules:
-            st.info(f"ℹ️ No extract schedules to migrate for {item_type} {src_item.name}")
-            return
+        # Get existing schedules on destination to avoid duplicates
+        dest_existing_schedules = {s.name.lower(): s for s in TSC.Pager(dest_server.schedules)}
 
-        # Create destination schedules
-        for schedule in schedules:
+        migrated_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for schedule in all_schedules:
             # Skip if schedule already exists on destination
-            dest_schedules = list(TSC.Pager(dest_server.schedules))
-            if any(s.name.lower() == schedule.name.lower() for s in dest_schedules):
-                st.info(f"ℹ️ Schedule {schedule.name} already exists on destination")
+            if schedule.name.lower() in dest_existing_schedules:
+                st.info(f"ℹ️ Schedule '{schedule.name}' already exists on destination - skipping")
+                skipped_count += 1
                 continue
 
-            new_schedule = TSC.ScheduleItem(
-                name=schedule.name,
-                priority=schedule.priority,
-                frequency=schedule.frequency,
-                execution_order=schedule.execution_order,
-                state=schedule.state
-            )
-
-            # Set time details based on frequency
-            if schedule.frequency == 'Hourly':
-                new_schedule.hourly_schedule = schedule.hourly_schedule
-            elif schedule.frequency == 'Daily':
-                new_schedule.daily_schedule = schedule.daily_schedule
-            elif schedule.frequency == 'Weekly':
-                new_schedule.weekly_schedule = schedule.weekly_schedule
-            elif schedule.frequency == 'Monthly':
-                new_schedule.monthly_schedule = schedule.monthly_schedule
-
-            # Create schedule on destination
             try:
+                # Create new schedule
+                new_schedule = TSC.ScheduleItem(
+                    name=schedule.name,
+                    priority=schedule.priority,
+                    frequency=schedule.frequency,
+                    execution_order=schedule.execution_order,
+                    state=schedule.state
+                )
+
+                # Copy schedule details based on frequency
+                if schedule.frequency == 'Hourly':
+                    new_schedule.hourly_schedule = schedule.hourly_schedule
+                elif schedule.frequency == 'Daily':
+                    new_schedule.daily_schedule = schedule.daily_schedule
+                elif schedule.frequency == 'Weekly':
+                    new_schedule.weekly_schedule = schedule.weekly_schedule
+                elif schedule.frequency == 'Monthly':
+                    new_schedule.monthly_schedule = schedule.monthly_schedule
+
+                # Create schedule on destination
                 created_schedule = dest_server.schedules.create(new_schedule)
+                migrated_count += 1
+                st.success(f"✅ Created schedule '{schedule.name}'")
+
+                # Try to find associated items (for informational purposes)
+                associated_items = []
+                if hasattr(schedule, 'workbook') and schedule.workbook:
+                    associated_items.append(f"workbook: {schedule.workbook.name}")
+                if hasattr(schedule, 'datasource') and schedule.datasource:
+                    associated_items.append(f"datasource: {schedule.datasource.name}")
                 
-                # Assign schedule to item
-                if item_type == 'workbook':
-                    dest_server.workbooks.schedule_extract_refresh(dest_item.id, created_schedule.id)
-                elif item_type == 'datasource':
-                    dest_server.datasources.schedule_extract_refresh(dest_item.id, created_schedule.id)
-                
-                st.success(f"✅ Created schedule {schedule.name} for {item_type} {src_item.name}")
+                if associated_items:
+                    st.info(f"   Associated with: {', '.join(associated_items)}")
+
             except Exception as e:
-                st.error(f"❌ Failed to create schedule {schedule.name}: {str(e)}")
+                failed_count += 1
+                st.error(f"❌ Failed to create schedule '{schedule.name}': {str(e)}")
+
+        # Summary
+        st.success(f"\nMigration Summary:")
+        st.info(f"Total schedules found: {len(all_schedules)}")
+        st.info(f"Successfully migrated: {migrated_count}")
+        st.info(f"Skipped (already exists): {skipped_count}")
+        st.info(f"Failed to migrate: {failed_count}")
 
     except Exception as e:
-        st.error(f"❌ Failed to migrate schedules for {item_type} {src_item.name}: {str(e)}")
+        st.error(f"❌ Failed to migrate schedules: {str(e)}")
         raise
 # --------------------------
 # Content Download Functions
