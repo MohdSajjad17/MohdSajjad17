@@ -190,7 +190,7 @@ def migrate_permissions(
     user_map: Dict[str, TSC.UserItem],
     group_map: Dict[str, TSC.GroupItem] = None
 ):
-    """Migrate permissions from source to destination item with proper grantee handling."""
+    """Migrate permissions from source to destination item with proper user/group mapping."""
     try:
         # Get source permissions
         if item_type == 'workbook':
@@ -200,54 +200,42 @@ def migrate_permissions(
             src_server.datasources.populate_permissions(src_item)
             permissions = src_item.permissions
         else:
+            st.warning(f"Unsupported item type: {item_type}")
             return
 
         if not permissions:
-            st.info(f"ℹ️ No permissions to migrate for {item_type} {src_item.name}")
+            st.info(f"ℹ️ No permissions to migrate for {item_type} '{src_item.name}'")
             return
 
-        # Prepare new permissions
         new_permissions = []
+
         for rule in permissions:
-            grantee = rule.grantee
+            grantee_type = rule.grantee.tag_name  # "user" or "group"
             capabilities = rule.capabilities
+            grantee_id = rule.grantee.id
 
-            # Skip if grantee is not properly defined
-            if not hasattr(grantee, 'id'):
-                continue
-
-            # Handle user permissions
-            if grantee.tag_name == 'user':
-                # Get user details from source server to get the username
-                try:
-                    src_user = src_server.users.get_by_id(grantee.id)
-                    if src_user.name.lower() in user_map:
-                        grantee = TSC.UserItem.as_reference(user_map[src_user.name.lower()].id)
-                    else:
-                        st.warning(f"⚠️ User {src_user.name} not found in destination, skipping permission")
-                        continue
-                except Exception as e:
-                    st.warning(f"⚠️ Could not fetch user details for ID {grantee.id}, skipping: {str(e)}")
+            if grantee_type == 'user':
+                # Match by user ID from the map
+                user = next((u for u in user_map.values() if u.id == grantee_id), None)
+                if user:
+                    grantee = TSC.UserItem.as_reference(user.id)
+                else:
+                    st.warning(f"⚠️ User with ID '{grantee_id}' not found in destination, skipping permission")
                     continue
 
-            # Handle group permissions
-            elif grantee.tag_name == 'group':
+            elif grantee_type == 'group':
                 if not group_map:
-                    continue
-                
-                # Get group details from source server to get the group name
-                try:
-                    src_group = src_server.groups.get_by_id(grantee.id)
-                    if src_group.name.lower() in group_map:
-                        grantee = TSC.GroupItem.as_reference(group_map[src_group.name.lower()].id)
-                    else:
-                        st.warning(f"⚠️ Group {src_group.name} not found in destination, skipping permission")
-                        continue
-                except Exception as e:
-                    st.warning(f"⚠️ Could not fetch group details for ID {grantee.id}, skipping: {str(e)}")
+                    st.warning(f"⚠️ Group map is missing. Cannot resolve group ID '{grantee_id}'")
                     continue
 
+                group = next((g for g in group_map.values() if g.id == grantee_id), None)
+                if group:
+                    grantee = TSC.GroupItem.as_reference(group.id)
+                else:
+                    st.warning(f"⚠️ Group with ID '{grantee_id}' not found in destination, skipping permission")
+                    continue
             else:
+                st.warning(f"⚠️ Unsupported grantee type '{grantee_type}', skipping.")
                 continue
 
             new_permissions.append(
@@ -257,20 +245,18 @@ def migrate_permissions(
                 )
             )
 
-        # Apply permissions
-        if new_permissions:  # Only update if we have permissions to set
-            if item_type == 'workbook':
-                dest_server.workbooks.update_permissions(dest_item, new_permissions)
-            elif item_type == 'datasource':
-                dest_server.datasources.update_permissions(dest_item, new_permissions)
+        # Apply permissions to the destination item
+        if item_type == 'workbook':
+            dest_server.workbooks.update_permissions(dest_item, new_permissions)
+        elif item_type == 'datasource':
+            dest_server.datasources.update_permissions(dest_item, new_permissions)
 
-            st.success(f"✅ Successfully migrated {len(new_permissions)} permissions for {item_type} {src_item.name}")
-        else:
-            st.warning(f"⚠️ No valid permissions to migrate for {item_type} {src_item.name}")
+        st.success(f"✅ Migrated permissions for {item_type} '{src_item.name}'")
 
     except Exception as e:
-        st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {str(e)}")
+        st.error(f"❌ Failed to migrate permissions for {item_type} '{src_item.name}': {str(e)}")
         raise
+
 # --------------------------
 # Schedule Migration
 # --------------------------
