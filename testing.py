@@ -318,7 +318,21 @@ def download_content(server: TSC.Server, project_id: str, project_name: str, con
     downloaded_files = []
     
     try:
-        if content_type == "workbook":
+        if content_type == "datasource":
+            items = list(TSC.Pager(server.datasources))
+            for item in items:
+                if item.project_id == project_id:
+                    path = os.path.join(dirs['datasources'], f"{sanitize(item.name)}.tdsx")
+                    try:
+                        file_path = server.datasources.download(item.id, filepath=path, include_extract=True)
+                        if os.path.exists(file_path):
+                            downloaded_files.append((item, file_path, 'datasource'))
+                            st.success(f"✅ Downloaded datasource: {item.name}")
+                        else:
+                            st.error(f"❌ Datasource not saved: {item.name}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to download datasource {item.name}: {str(e)}")
+        elif content_type == "workbook":
             items = list(TSC.Pager(server.workbooks))
             for item in items:
                 if item.project_id == project_id:
@@ -333,20 +347,7 @@ def download_content(server: TSC.Server, project_id: str, project_name: str, con
                     except Exception as e:
                         st.error(f"❌ Failed to download workbook {item.name}: {str(e)}")
         
-        elif content_type == "datasource":
-            items = list(TSC.Pager(server.datasources))
-            for item in items:
-                if item.project_id == project_id:
-                    path = os.path.join(dirs['datasources'], f"{sanitize(item.name)}.tdsx")
-                    try:
-                        file_path = server.datasources.download(item.id, filepath=path, include_extract=True)
-                        if os.path.exists(file_path):
-                            downloaded_files.append((item, file_path, 'datasource'))
-                            st.success(f"✅ Downloaded datasource: {item.name}")
-                        else:
-                            st.error(f"❌ Datasource not saved: {item.name}")
-                    except Exception as e:
-                        st.error(f"❌ Failed to download datasource {item.name}: {str(e)}")
+
         
         elif content_type == "custom_view":
             items = list(TSC.Pager(server.views))
