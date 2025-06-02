@@ -190,7 +190,7 @@ def migrate_permissions(
     user_map: Dict[str, TSC.UserItem],
     group_map: Dict[str, TSC.GroupItem] = None
 ):
-    """Migrate permissions from source to destination item with group name handling."""
+    """Migrate permissions from source to destination item with proper grantee handling."""
     try:
         # Get source permissions
         if item_type == 'workbook':
@@ -209,23 +209,44 @@ def migrate_permissions(
         # Prepare new permissions
         new_permissions = []
         for rule in permissions:
-            grantee_type = rule.grantee.tag_name
+            grantee = rule.grantee
             capabilities = rule.capabilities
 
-            # Map user/group if needed
-            if grantee_type == 'user':
-                if rule.grantee.name.lower() in user_map:
-                    grantee = TSC.UserItem.as_reference(user_map[rule.grantee.name.lower()].id)
-                else:
-                    st.warning(f"⚠️ User {rule.grantee.name} not found in destination, skipping permission")
+            # Skip if grantee is not properly defined
+            if not hasattr(grantee, 'id'):
+                continue
+
+            # Handle user permissions
+            if grantee.tag_name == 'user':
+                # Get user details from source server to get the username
+                try:
+                    src_user = src_server.users.get_by_id(grantee.id)
+                    if src_user.name.lower() in user_map:
+                        grantee = TSC.UserItem.as_reference(user_map[src_user.name.lower()].id)
+                    else:
+                        st.warning(f"⚠️ User {src_user.name} not found in destination, skipping permission")
+                        continue
+                except Exception as e:
+                    st.warning(f"⚠️ Could not fetch user details for ID {grantee.id}, skipping: {str(e)}")
                     continue
-            elif grantee_type == 'group':
-                # Handle group by name instead of ID
-                if group_map and rule.grantee.name.lower() in group_map:
-                    grantee = TSC.GroupItem.as_reference(group_map[rule.grantee.name.lower()].id)
-                else:
-                    st.warning(f"⚠️ Group {rule.grantee.name} not found in destination, skipping permission")
+
+            # Handle group permissions
+            elif grantee.tag_name == 'group':
+                if not group_map:
                     continue
+                
+                # Get group details from source server to get the group name
+                try:
+                    src_group = src_server.groups.get_by_id(grantee.id)
+                    if src_group.name.lower() in group_map:
+                        grantee = TSC.GroupItem.as_reference(group_map[src_group.name.lower()].id)
+                    else:
+                        st.warning(f"⚠️ Group {src_group.name} not found in destination, skipping permission")
+                        continue
+                except Exception as e:
+                    st.warning(f"⚠️ Could not fetch group details for ID {grantee.id}, skipping: {str(e)}")
+                    continue
+
             else:
                 continue
 
@@ -237,17 +258,19 @@ def migrate_permissions(
             )
 
         # Apply permissions
-        if item_type == 'workbook':
-            dest_server.workbooks.update_permissions(dest_item, new_permissions)
-        elif item_type == 'datasource':
-            dest_server.datasources.update_permissions(dest_item, new_permissions)
+        if new_permissions:  # Only update if we have permissions to set
+            if item_type == 'workbook':
+                dest_server.workbooks.update_permissions(dest_item, new_permissions)
+            elif item_type == 'datasource':
+                dest_server.datasources.update_permissions(dest_item, new_permissions)
 
-        st.success(f"✅ Migrated permissions for {item_type} {src_item.name}")
+            st.success(f"✅ Successfully migrated {len(new_permissions)} permissions for {item_type} {src_item.name}")
+        else:
+            st.warning(f"⚠️ No valid permissions to migrate for {item_type} {src_item.name}")
 
     except Exception as e:
         st.error(f"❌ Failed to migrate permissions for {item_type} {src_item.name}: {str(e)}")
         raise
-
 # --------------------------
 # Schedule Migration
 # --------------------------
