@@ -5,13 +5,21 @@ import shutil
 import time
 import streamlit as st
 from tableauserverclient import Server, TableauAuth
-from tableauhyperapi import HyperProcess, Connection, Telemetry
 
 # Streamlit app configuration
 st.set_page_config(page_title="TDE to HYPER Converter", layout="wide")
 st.title("Tableau TWBX TDE to HYPER Converter")
 
-# Constants
+# Session state to maintain credentials
+if 'credentials' not in st.session_state:
+    st.session_state.credentials = {
+        'server_url': '',
+        'username': '',
+        'password': '',
+        'site_id': ''
+    }
+
+# Global variables
 TEMP_DIR = tempfile.mkdtemp()
 HYPER_CONVERSION_TIMEOUT = 300  # 5 minutes
 
@@ -35,19 +43,15 @@ def find_tde_files(directory):
                 tde_files.append(os.path.join(root, file))
     return tde_files
 
-def convert_tde_to_hyper(tde_path, hyper_path):
+def convert_tde_to_hyper(tde_path, hyper_path, server_url, username, password, site_id=""):
     """
     Convert TDE to HYPER using Tableau Server API
     """
     try:
         with st.spinner(f"Converting {os.path.basename(tde_path)} to HYPER..."):
             # Initialize Tableau Server connection
-            server = Server(st.secrets["tableau"]["server_url"])
-            auth = TableauAuth(
-                st.secrets["tableau"]["username"],
-                st.secrets["tableau"]["password"],
-                site_id=st.secrets["tableau"].get("site_id", "")
-            )
+            server = Server(server_url)
+            auth = TableauAuth(username, password, site_id=site_id)
             
             with server.auth.sign_in(auth):
                 # Create temp project if needed
@@ -109,7 +113,7 @@ def repackage_twbx(extracted_dir, output_path):
                 arcname = os.path.relpath(file_path, extracted_dir)
                 zipf.write(file_path, arcname)
 
-def process_uploaded_file(uploaded_file):
+def process_uploaded_file(uploaded_file, server_url, username, password, site_id):
     """Main processing function for uploaded files"""
     try:
         # Setup directories
@@ -137,7 +141,7 @@ def process_uploaded_file(uploaded_file):
         success_count = 0
         for tde_file in tde_files:
             hyper_file = tde_file.replace('.tde', '.hyper')
-            if convert_tde_to_hyper(tde_file, hyper_file):
+            if convert_tde_to_hyper(tde_file, hyper_file, server_url, username, password, site_id):
                 # Update workbook connections
                 update_workbook_connections(
                     extracted_dir,
@@ -162,9 +166,51 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error processing file: {str(e)}")
         return None
 
+# Credentials form
+def credentials_form():
+    """Form for entering Tableau Server credentials"""
+    with st.form("credentials_form"):
+        st.subheader("Tableau Server Credentials")
+        
+        server_url = st.text_input(
+            "Server URL", 
+            value=st.session_state.credentials['server_url'],
+            placeholder="https://your-tableau-server.com"
+        )
+        username = st.text_input(
+            "Username", 
+            value=st.session_state.credentials['username']
+        )
+        password = st.text_input(
+            "Password", 
+            value=st.session_state.credentials['password'],
+            type="password"
+        )
+        site_id = st.text_input(
+            "Site ID (leave empty for default site)", 
+            value=st.session_state.credentials['site_id']
+        )
+        
+        submitted = st.form_submit_button("Save Credentials")
+        
+        if submitted:
+            st.session_state.credentials = {
+                'server_url': server_url,
+                'username': username,
+                'password': password,
+                'site_id': site_id
+            }
+            st.success("Credentials saved!")
+
 # Main app interface
 def main():
-    st.sidebar.header("Configuration")
+    # Show credentials form
+    credentials_form()
+    
+    # Only proceed if credentials are provided
+    if not all(st.session_state.credentials.values()):
+        st.warning("Please provide Tableau Server credentials first")
+        return
     
     # File uploader
     uploaded_file = st.file_uploader(
@@ -178,7 +224,13 @@ def main():
         
         if st.button("Convert TDE to HYPER"):
             with st.spinner("Processing workbook..."):
-                output_path = process_uploaded_file(uploaded_file)
+                output_path = process_uploaded_file(
+                    uploaded_file,
+                    st.session_state.credentials['server_url'],
+                    st.session_state.credentials['username'],
+                    st.session_state.credentials['password'],
+                    st.session_state.credentials['site_id']
+                )
                 
                 if output_path:
                     st.success("Conversion completed successfully!")
@@ -194,25 +246,22 @@ def main():
     
     st.sidebar.markdown("""
     ### Instructions:
-    1. Upload a Tableau packaged workbook (.twbx)
-    2. Click "Convert TDE to HYPER"
-    3. Download the converted workbook
+    1. Enter your Tableau Server credentials
+    2. Upload a Tableau packaged workbook (.twbx)
+    3. Click "Convert TDE to HYPER"
+    4. Download the converted workbook
     
     ### Requirements:
-    - Tableau Server credentials (configure in secrets.toml)
+    - Valid Tableau Server credentials
     - Internet connection to your Tableau Server
+    - Workbooks must be under 200MB (Streamlit file upload limit)
     """)
 
 # Run the app
 if __name__ == "__main__":
-    # Check for required secrets
     try:
-        if not all(key in st.secrets["tableau"] for key in ["server_url", "username", "password"]):
-            st.error("Missing Tableau Server configuration in secrets.toml")
-            st.stop()
-        
         main()
     except Exception as e:
-        st.error(f"Initialization error: {str(e)}")
+        st.error(f"Application error: {str(e)}")
     finally:
         cleanup_temp_files()
