@@ -200,7 +200,7 @@ def run_import(import_type, uploaded_file, auth):
         st.error(f"❌ Import failed: {str(e)}")
 
 # ------------------------
-# Excel to CSV Conversion Logic
+# Excel to CSV Conversion Logic (Updated to your requested format)
 # ------------------------
 def convert_excel_to_csv(uploaded_file):
     if not uploaded_file:
@@ -216,40 +216,22 @@ def convert_excel_to_csv(uploaded_file):
         
         # Process each row
         for _, row in df.iterrows():
-            email = row.get('Email', '')  # Get email (case-sensitive)
+            # Extract fields with case-insensitive matching
+            name = str(row.get('Name', row.get('name', ''))).strip()
+            site_role = str(row.get('Site Role', row.get('site_role', row.get('SiteRole', '')))).strip()
+            email = str(row.get('Email', row.get('email', ''))).strip()
+            full_name = str(row.get('Full Name', row.get('full_name', row.get('FullName', ''))).strip()
             
-            # Get site role (case-sensitive)
-            site_role = row.get('Site Role', '')
-            
-            # Transform site role according to rules
-            simplified_role = ''
-            fifth_column = 'None'
-            sixth_column = 'False'
-            
-            if 'SiteAdministratorCreator' in site_role:
-                simplified_role = 'Creator'
-                fifth_column = 'site'
-                sixth_column = 'True'
-            elif 'ExplorerCanPublish' in site_role:
-                simplified_role = 'Explorer'
-                sixth_column = 'True'
-            elif 'Viewer' in site_role:
-                simplified_role = 'Viewer'
-            elif 'SiteAdministratorExplorer' in site_role:
-                simplified_role = 'Explorer'
-                fifth_column = 'site'
-                sixth_column = 'True'
-            else:
-                simplified_role = site_role  # Fallback to original if no match
-            
-            # Add transformed row to our data
+            # Skip rows with empty name or site_role
+            if not name or not site_role:
+                continue
+                
+            # Add row in the exact format: name,site_role,email,full_name
             transformed_data.append([
-                email,        # 1st column: Email
-                '',           # 2nd column: Empty
-                '',           # 3rd column: Empty
-                simplified_role,  # 4th column: Simplified role
-                fifth_column,     # 5th column: 'site' or 'None'
-                sixth_column       # 6th column: 'True' or 'False'
+                name,
+                site_role,
+                email,
+                full_name
             ])
         
         # Convert to CSV without headers
@@ -259,11 +241,12 @@ def convert_excel_to_csv(uploaded_file):
         st.download_button(
             label="⬇️ Download Converted CSV",
             data=csv_data,
-            file_name="converted_users.csv",
-            mime="text/csv"
+            file_name="users_import_ready.csv",
+            mime="text/csv",
+            help="CSV format: name,site_role,email,full_name (no headers)"
         )
         
-        st.success("✅ Conversion complete!")
+        st.success("✅ Conversion complete! File is ready for import.")
         
     except Exception as e:
         st.error(f"❌ Conversion failed: {str(e)}")
@@ -323,7 +306,11 @@ elif mode == "Import Users & Groups":
 
 elif mode == "Convert User Excel to User CSV":
     st.subheader("🔄 Convert User Excel to User CSV")
-    st.markdown("Upload an Excel file exported from Tableau to convert it to the required CSV format.")
+    st.markdown("""
+    **Convert Excel to import-ready CSV format:**
+    - Output format: name,site_role,email,full_name (no headers)
+    - Will automatically match common column name variations
+    """)
     
     uploaded_file = st.file_uploader("📤 Upload Excel File", type=["xlsx", "xls"])
     
