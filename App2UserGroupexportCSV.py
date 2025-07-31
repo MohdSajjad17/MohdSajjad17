@@ -97,7 +97,7 @@ def run_export(auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Simplified Import Mode Logic
+# Simplified Import Mode Logic (No headers in CSV)
 # ------------------------
 def run_import(import_type, uploaded_file, auth):
     if not uploaded_file:
@@ -109,50 +109,54 @@ def run_import(import_type, uploaded_file, auth):
             server = connect_to_tableau(auth)
         st.success("✅ Connected to Tableau")
 
-        df = pd.read_csv(uploaded_file)
-        st.write("📄 CSV Preview:", df.head())
+        # Read CSV without headers
+        df = pd.read_csv(uploaded_file, header=None)
+        st.write("📄 CSV Preview (first 5 rows):")
+        st.dataframe(df.head(5))
 
         if import_type == "Users":
-            st.info("ℹ️ Importing users as-is from the CSV file")
+            st.info("ℹ️ Importing users from headerless CSV (format: name,site_role,email,full_name)")
             success_count = 0
             error_count = 0
             
             for _, row in df.iterrows():
                 try:
-                    # Create user with just name and site_role (minimum required fields)
+                    # Assume columns are in order: name, site_role, email, full_name
+                    # Only name and site_role are required
+                    if len(row) < 2:
+                        st.warning(f"Skipping row - needs at least 2 columns: {list(row)}")
+                        continue
+                        
                     new_user = TSC.UserItem(
-                        name=row.get('name', row.get('Name', '')),
-                        site_role=row.get('site_role', row.get('Site Role', ''))
+                        name=str(row[0]).strip(),  # First column is name
+                        site_role=str(row[1]).strip()  # Second column is site_role
                     )
                     
-                    # Add optional fields if they exist in the CSV
-                    if 'email' in row or 'Email' in row:
-                        new_user.email = row.get('email', row.get('Email', ''))
-                    if 'full_name' in row or 'Full Name' in row:
-                        new_user.full_name = row.get('full_name', row.get('Full Name', ''))
+                    # Add optional fields if they exist
+                    if len(row) > 2:  # Third column is email if exists
+                        new_user.email = str(row[2]).strip()
+                    if len(row) > 3:  # Fourth column is full_name if exists
+                        new_user.full_name = str(row[3]).strip()
                     
                     server.users.add(new_user)
                     success_count += 1
                 except Exception as e:
                     error_count += 1
-                    st.warning(f"⚠️ Could not add user {row.get('name', row.get('Name', 'unknown'))}: {str(e)}")
+                    st.warning(f"⚠️ Could not add user {row[0] if len(row) > 0 else 'unknown'}: {str(e)}")
 
             st.success(f"✅ User import completed! Success: {success_count}, Failed: {error_count}")
 
         elif import_type == "Groups":
+            st.info("ℹ️ Importing groups from headerless CSV (first column is group name)")
             for _, row in df.iterrows():
                 try:
-                    # Use the first non-empty string value as group name
-                    group_name = None
-                    for val in row.values:
-                        if isinstance(val, str) and val.strip():
-                            group_name = val.strip()
-                            break
-
-                    if not group_name:
-                        st.warning(f"Skipping row with no valid group name: {row}")
+                    if len(row) == 0:
                         continue
-
+                        
+                    group_name = str(row[0]).strip()
+                    if not group_name:
+                        continue
+                        
                     new_group = TSC.GroupItem(name=group_name)
                     server.groups.create(new_group)
                     st.success(f"Created group: {group_name}")
@@ -258,11 +262,11 @@ elif mode == "Import Users & Groups":
     import_type = st.selectbox("Import Type", ["Users", "Groups"])
 
     if import_type == "Users":
-        uploaded_file = st.file_uploader("📤 Upload Users CSV (pre-formatted file)", type="csv")
-        st.markdown("Upload your pre-formatted user CSV file - it will be imported as-is")
+        uploaded_file = st.file_uploader("📤 Upload Users CSV (no headers, format: name,site_role,email,full_name)", type="csv")
+        st.markdown("Upload headerless CSV with columns in order: name, site_role, email, full_name")
     else:
-        uploaded_file = st.file_uploader("📤 Upload Groups CSV (any format with group names)", type="csv")
-        st.markdown("Upload your group CSV file — the first string column value in each row will be used as group name.")
+        uploaded_file = st.file_uploader("📤 Upload Groups CSV (no headers, first column is group name)", type="csv")
+        st.markdown("Upload headerless CSV - first column will be used as group name")
 
     st.markdown("---")
     st.subheader("🔐 Tableau Credentials")
