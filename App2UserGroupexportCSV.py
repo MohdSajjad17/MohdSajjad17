@@ -1,13 +1,14 @@
 import streamlit as st
 import tableauserverclient as TSC
 import pandas as pd
+import numpy as np
 
 # ------------------------
 # App Header
 # ------------------------
 st.set_page_config(page_title="Tableau Export/Import Tool", layout="centered")
 st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World CLT</h1>", unsafe_allow_html=True)
-st.markdown("#### 🔐 Connect to Tableau Server / Cloud to Export or Import Content")
+st.markdown("#### 🔐 Connect to Tableau Server/Cloud to Export or Import Content")
 st.markdown("---")
 
 # ------------------------
@@ -97,7 +98,7 @@ def run_export(auth):
         st.error(f"❌ Connection failed: {str(e)}")
 
 # ------------------------
-# Simplified Import Mode Logic (No headers in CSV)
+# Import Mode Logic (Headerless CSV)
 # ------------------------
 def run_import(import_type, uploaded_file, auth):
     if not uploaded_file:
@@ -109,8 +110,8 @@ def run_import(import_type, uploaded_file, auth):
             server = connect_to_tableau(auth)
         st.success("✅ Connected to Tableau")
 
-        # Read CSV without headers
-        df = pd.read_csv(uploaded_file, header=None)
+        # Read CSV without headers and handle empty values
+        df = pd.read_csv(uploaded_file, header=None).replace('', np.nan)
         st.write("📄 CSV Preview (first 5 rows):")
         st.dataframe(df.head(5))
 
@@ -118,39 +119,60 @@ def run_import(import_type, uploaded_file, auth):
             st.info("ℹ️ Importing users from headerless CSV (format: name,site_role,email,full_name)")
             success_count = 0
             error_count = 0
+            skipped_count = 0
             
-            for _, row in df.iterrows():
+            for index, row in df.iterrows():
                 try:
-                    # Assume columns are in order: name, site_role, email, full_name
-                    # Only name and site_role are required
-                    if len(row) < 2:
-                        st.warning(f"Skipping row - needs at least 2 columns: {list(row)}")
+                    # Skip empty rows or rows with missing required fields
+                    if len(row) < 2 or pd.isna(row[0]) or pd.isna(row[1]):
+                        skipped_count += 1
                         continue
                         
+                    name = str(row[0]).strip()
+                    site_role = str(row[1]).strip()
+                    
+                    # Validate site_role is not empty and is valid
+                    if not site_role:
+                        st.warning(f"⚠️ Row {index+1}: Skipping - site_role cannot be empty")
+                        skipped_count += 1
+                        continue
+                    
+                    # Create the user
                     new_user = TSC.UserItem(
-                        name=str(row[0]).strip(),  # First column is name
-                        site_role=str(row[1]).strip()  # Second column is site_role
+                        name=name,
+                        site_role=site_role
                     )
                     
                     # Add optional fields if they exist
-                    if len(row) > 2:  # Third column is email if exists
+                    if len(row) > 2 and not pd.isna(row[2]):  # Email
                         new_user.email = str(row[2]).strip()
-                    if len(row) > 3:  # Fourth column is full_name if exists
+                    if len(row) > 3 and not pd.isna(row[3]):  # Full name
                         new_user.full_name = str(row[3]).strip()
                     
                     server.users.add(new_user)
                     success_count += 1
+                    st.success(f"Row {index+1}: Added user {name} ({site_role})")
+                    
                 except Exception as e:
                     error_count += 1
-                    st.warning(f"⚠️ Could not add user {row[0] if len(row) > 0 else 'unknown'}: {str(e)}")
+                    user_ref = row[0] if len(row) > 0 and not pd.isna(row[0]) else f"Row {index+1}"
+                    st.warning(f"⚠️ Could not add user {user_ref}: {str(e)}")
 
-            st.success(f"✅ User import completed! Success: {success_count}, Failed: {error_count}")
+            st.success(f"""
+            ✅ User import completed!
+            - Success: {success_count}
+            - Failed: {error_count}
+            - Skipped: {skipped_count}
+            """)
 
         elif import_type == "Groups":
             st.info("ℹ️ Importing groups from headerless CSV (first column is group name)")
-            for _, row in df.iterrows():
+            success_count = 0
+            error_count = 0
+            
+            for index, row in df.iterrows():
                 try:
-                    if len(row) == 0:
+                    if len(row) == 0 or pd.isna(row[0]):
                         continue
                         
                     group_name = str(row[0]).strip()
@@ -159,11 +181,17 @@ def run_import(import_type, uploaded_file, auth):
                         
                     new_group = TSC.GroupItem(name=group_name)
                     server.groups.create(new_group)
-                    st.success(f"Created group: {group_name}")
+                    success_count += 1
+                    st.success(f"Row {index+1}: Created group {group_name}")
                 except Exception as e:
-                    st.warning(f"⚠️ Could not create group: {str(e)}")
+                    error_count += 1
+                    st.warning(f"⚠️ Row {index+1}: Could not create group: {str(e)}")
 
-            st.success("✅ All groups imported!")
+            st.success(f"""
+            ✅ Group import completed!
+            - Success: {success_count}
+            - Failed: {error_count}
+            """)
 
         server.auth.sign_out()
         st.info("🔐 Signed out successfully.")
@@ -263,10 +291,19 @@ elif mode == "Import Users & Groups":
 
     if import_type == "Users":
         uploaded_file = st.file_uploader("📤 Upload Users CSV (no headers, format: name,site_role,email,full_name)", type="csv")
-        st.markdown("Upload headerless CSV with columns in order: name, site_role, email, full_name")
+        st.markdown("""
+        **CSV Format Requirements:**
+        - No header row
+        - Columns in order: name, site_role, email (optional), full_name (optional)
+        - Required fields: name and site_role
+        """)
     else:
         uploaded_file = st.file_uploader("📤 Upload Groups CSV (no headers, first column is group name)", type="csv")
-        st.markdown("Upload headerless CSV - first column will be used as group name")
+        st.markdown("""
+        **CSV Format Requirements:**
+        - No header row
+        - First column contains group names
+        """)
 
     st.markdown("---")
     st.subheader("🔐 Tableau Credentials")
