@@ -13,3 +13,4 @@ tableauhyperapi>=0.0.17600
 openpyxl
 xlsxwriter
 python-dateutil
+numpy
