@@ -200,7 +200,7 @@ def run_import(import_type, uploaded_file, auth):
         st.error(f"❌ Import failed: {str(e)}")
 
 # ------------------------
-# Excel to CSV Conversion Logic (Updated to your requested format)
+# Excel to CSV Conversion Logic (Updated with fixed syntax)
 # ------------------------
 def convert_excel_to_csv(uploaded_file):
     if not uploaded_file:
@@ -218,7 +218,7 @@ def convert_excel_to_csv(uploaded_file):
         for _, row in df.iterrows():
             # Extract fields with case-insensitive matching
             name = str(row.get('Name', row.get('name', ''))).strip()
-            site_role = str(row.get('Site Role', row.get('site_role', row.get('SiteRole', '')))).strip()
+            site_role = str(row.get('Site Role', row.get('site_role', row.get('SiteRole', ''))).strip()
             email = str(row.get('Email', row.get('email', ''))).strip()
             full_name = str(row.get('Full Name', row.get('full_name', row.get('FullName', ''))).strip()
             
