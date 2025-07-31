@@ -200,7 +200,7 @@ def run_import(import_type, uploaded_file, auth):
         st.error(f"❌ Import failed: {str(e)}")
 
 # ------------------------
-# Excel to CSV Conversion Logic (Updated with fixed syntax)
+# Excel to CSV Conversion Logic (Fixed Syntax)
 # ------------------------
 def convert_excel_to_csv(uploaded_file):
     if not uploaded_file:
