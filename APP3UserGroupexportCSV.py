@@ -200,7 +200,7 @@ def main():
         st.markdown("""
         <div class="sidebar-footer">
             <p class="version">Version 2.0</p>
-            <p class="author">Developed by Data Ops Team</p>
+            <p class="author">Developed by MS</p>
         </div>
         """, unsafe_allow_html=True)
 
