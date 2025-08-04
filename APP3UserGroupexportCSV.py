@@ -167,6 +167,230 @@ def export_datasources(server):
         to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
 
 # ------------------------
+# Download Workbook Functions
+# ------------------------
+def download_workbooks(auth, server_url):
+    """Enhanced workbook download function with better UX and error handling"""
+    try:
+        # Connection section
+        with st.spinner("🔄 Establishing secure connection to Tableau Server..."):
+            server = connect_to_tableau(auth, server_url)
+            st.toast("✅ Connection established successfully!", icon="✅")
+        
+        # Display connection info in expander
+        with st.expander("ℹ️ Connection Details", expanded=False):
+            st.write(f"Connected to: {server.server_address}")
+            st.write(f"Site: {auth.site_id or 'Default'}")
+            st.write(f"User: {getattr(auth, 'username', 'PAT User')}")
+
+        # Download options section
+        st.markdown("### 📥 Download Options")
+        download_option = st.radio(
+            "Select download scope:",
+            ["Download all workbooks from a project", 
+             "Download specific workbook",
+             "Search and download workbooks"],
+            horizontal=True,
+            help="Choose whether to download all workbooks from a project or select specific ones"
+        )
+
+        # Get projects with progress indicator
+        with st.spinner("🔍 Loading available projects..."):
+            projects, _ = server.projects.get()
+            if not projects:
+                st.error("No projects found on this site!")
+                return
+            
+            project_names = [p.name for p in projects]
+            selected_project = st.selectbox(
+                "Select project:",
+                project_names,
+                help="Select the project containing the workbooks you want to download"
+            )
+
+        # Main download logic
+        if download_option == "Download all workbooks from a project":
+            _download_all_workbooks(server, selected_project)
+            
+        elif download_option == "Download specific workbook":
+            _download_single_workbook(server, selected_project)
+            
+        else:  # Search and download workbooks
+            _search_and_download_workbooks(server, selected_project)
+
+        # Clean up
+        server.auth.sign_out()
+        st.toast("🔐 Session ended successfully", icon="🔒")
+
+    except TSC.ServerResponseError as e:
+        st.error(f"❌ Tableau Server error: {str(e)}")
+    except Exception as e:
+        st.error(f"❌ Unexpected error: {str(e)}")
+
+def _download_all_workbooks(server, project_name):
+    """Helper function to download all workbooks from a project"""
+    with st.spinner(f"🔍 Scanning project '{project_name}' for workbooks..."):
+        workbooks, _ = server.workbooks.get()
+        project_workbooks = [w for w in workbooks if w.project_name == project_name]
+        
+        if not project_workbooks:
+            st.warning(f"⚠️ No workbooks found in project '{project_name}'")
+            return
+        
+        st.success(f"Found {len(project_workbooks)} workbooks in '{project_name}'")
+        
+        # Progress bar for multiple downloads
+        progress_bar = st.progress(0)
+        total = len(project_workbooks)
+        
+        for i, wb in enumerate(project_workbooks):
+            try:
+                progress_bar.progress((i + 1) / total, text=f"Downloading {wb.name}...")
+                
+                with st.spinner(f"⏳ Downloading '{wb.name}'..."):
+                    workbook_path = server.workbooks.download(wb.id)
+                    
+                    with open(workbook_path, 'rb') as f:
+                        workbook_data = f.read()
+                    
+                    # Create download button with additional info
+                    with st.container():
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.caption(f"Project: {wb.project_name}")
+                            st.caption(f"Last updated: {wb.updated_at}")
+                        with col2:
+                            st.download_button(
+                                label="Download",
+                                data=workbook_data,
+                                file_name=f"{wb.name}.twbx",
+                                mime="application/octet-stream",
+                                key=f"dl_{wb.id}",
+                                help=f"Download {wb.name}"
+                            )
+                    
+                    os.remove(workbook_path)
+                    
+            except Exception as e:
+                st.error(f"Failed to download '{wb.name}': {str(e)}")
+                continue
+        
+        progress_bar.empty()
+        st.toast(f"🎉 Downloaded {len(project_workbooks)} workbooks!", icon="🎉")
+
+def _download_single_workbook(server, project_name):
+    """Helper function to download a specific workbook"""
+    with st.spinner(f"🔍 Loading workbooks from '{project_name}'..."):
+        workbooks, _ = server.workbooks.get()
+        project_workbooks = [w for w in workbooks if w.project_name == project_name]
+        
+        if not project_workbooks:
+            st.warning(f"⚠️ No workbooks found in project '{project_name}'")
+            return
+        
+        workbook_names = [w.name for w in project_workbooks]
+        selected_workbook = st.selectbox(
+            "Select workbook to download:",
+            workbook_names,
+            help="Select the specific workbook you want to download"
+        )
+        
+        workbook = next(w for w in project_workbooks if w.name == selected_workbook)
+        
+        # Show workbook metadata
+        with st.expander("📊 Workbook Details"):
+            st.write(f"**Name:** {workbook.name}")
+            st.write(f"**Owner:** {workbook.owner_id}")
+            st.write(f"**Created:** {workbook.created_at}")
+            st.write(f"**Last Updated:** {workbook.updated_at}")
+            st.write(f"**Size:** {getattr(workbook, 'size', 'N/A')}")
+        
+        if st.button("🚀 Download Workbook", type="primary"):
+            with st.spinner(f"⏳ Downloading '{selected_workbook}'..."):
+                try:
+                    workbook_path = server.workbooks.download(workbook.id)
+                    
+                    with open(workbook_path, 'rb') as f:
+                        workbook_data = f.read()
+                    
+                    st.download_button(
+                        label="⬇️ Download Now",
+                        data=workbook_data,
+                        file_name=f"{selected_workbook}.twbx",
+                        mime="application/octet-stream",
+                        key=f"dl_{workbook.id}_single"
+                    )
+                    os.remove(workbook_path)
+                    st.toast(f"✅ Downloaded '{selected_workbook}' successfully!", icon="✅")
+                    
+                except Exception as e:
+                    st.error(f"❌ Download failed: {str(e)}")
+
+def _search_and_download_workbooks(server, project_name):
+    """Helper function for search and download functionality"""
+    st.markdown("### 🔍 Search Workbooks")
+    
+    search_query = st.text_input(
+        "Search by workbook name:",
+        help="Enter part of the workbook name to filter results"
+    )
+    
+    with st.spinner(f"🔍 Searching workbooks in '{project_name}'..."):
+        workbooks, _ = server.workbooks.get()
+        project_workbooks = [w for w in workbooks if w.project_name == project_name]
+        
+        if search_query:
+            project_workbooks = [
+                w for w in project_workbooks 
+                if search_query.lower() in w.name.lower()
+            ]
+        
+        if not project_workbooks:
+            st.warning("⚠️ No matching workbooks found")
+            return
+        
+        st.success(f"Found {len(project_workbooks)} matching workbooks")
+        
+        # Display workbook list with checkboxes
+        selected_workbooks = []
+        for wb in project_workbooks:
+            if st.checkbox(
+                f"{wb.name} (Updated: {wb.updated_at})",
+                key=f"wb_{wb.id}"
+            ):
+                selected_workbooks.append(wb)
+        
+        if selected_workbooks and st.button(
+            f"📥 Download {len(selected_workbooks)} Selected Workbooks",
+            type="primary"
+        ):
+            progress_bar = st.progress(0)
+            total = len(selected_workbooks)
+            
+            for i, wb in enumerate(selected_workbooks):
+                progress_bar.progress((i + 1) / total, text=f"Downloading {wb.name}...")
+                
+                try:
+                    workbook_path = server.workbooks.download(wb.id)
+                    with open(workbook_path, 'rb') as f:
+                        workbook_data = f.read()
+                    
+                    st.download_button(
+                        label=f"⬇️ {wb.name}",
+                        data=workbook_data,
+                        file_name=f"{wb.name}.twbx",
+                        mime="application/octet-stream",
+                        key=f"dl_{wb.id}_multi"
+                    )
+                    os.remove(workbook_path)
+                    
+                except Exception as e:
+                    st.error(f"Failed to download '{wb.name}': {str(e)}")
+            
+            progress_bar.empty()
+            st.toast(f"🎉 Downloaded {len(selected_workbooks)} workbooks!", icon="🎉")
+
+# ------------------------
 # Main App Logic
 # ------------------------
 def main():
@@ -191,7 +415,11 @@ def main():
         
         mode = st.radio(
             "Select Operation",
-            ["📤 Export Content", "📥 Import Users/Groups", "🔄 Convert User Format"],
+            ["📤 Export Content", 
+             "📥 Import Users/Groups", 
+             "🔄 Convert User Format",
+             "⬇️ Download Workbooks",
+             "⬆️ Upload Workbooks"],
             key="nav_mode"
         )
         
@@ -205,7 +433,7 @@ def main():
         """, unsafe_allow_html=True)
 
     # Connection Manager (for modes that need Tableau connection)
-    if mode in ["📤 Export Content", "📥 Import Users/Groups"]:
+    if mode in ["📤 Export Content", "📥 Import Users/Groups", "⬇️ Download Workbooks", "⬆️ Upload Workbooks"]:
         st.markdown("""
         <div class="colored-header">
             <h2>Tableau Server Connection</h2>
@@ -420,6 +648,20 @@ def main():
                     
                 except Exception as e:
                     st.error(f"❌ Conversion failed: {str(e)}")
+    
+    elif mode == "⬇️ Download Workbooks":
+        download_workbooks(auth, server_url)
+        
+    elif mode == "⬆️ Upload Workbooks":
+        st.markdown("""
+        <div class="colored-header">
+            <h2>Workbook Upload</h2>
+            <p>Upload workbooks to Tableau Server</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.warning("⚠️ Workbook upload functionality is not yet implemented")
+        st.info("This feature will be available in the next version")
 
 # ------------------------
 # Run the App
