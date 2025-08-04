@@ -3,36 +3,331 @@ import tableauserverclient as TSC
 import pandas as pd
 import os
 from io import BytesIO
+import base64
+
+# ------------------------
+# Custom CSS Styling
+# ------------------------
+def local_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+
+# Load custom CSS
+local_css("style.css")
+
+# ------------------------
+# App Configuration
+# ------------------------
+st.set_page_config(
+    page_title="Tableau Migration Toolkit",
+    page_icon=":bar_chart:",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ------------------------
+# Custom Components
+# ------------------------
+def colored_header(label, description=None, color=None):
+    st.markdown(
+        f"""
+        <div class="colored-header" style="border-left: 5px solid {color};">
+            <h2>{label}</h2>
+            {f'<p>{description}</p>' if description else ''}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def feature_card(title, description, icon):
+    st.markdown(
+        f"""
+        <div class="feature-card">
+            <div class="feature-icon">{icon}</div>
+            <h3>{title}</h3>
+            <p>{description}</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # ------------------------
 # App Header
 # ------------------------
-st.set_page_config(page_title="Tableau Export/Import Tool", layout="centered")
-st.markdown("<h1 style='text-align: center; color: #4B8BBE;'>🌍 Welcome to Migration World CLT</h1>", unsafe_allow_html=True)
-st.markdown("#### 🔐 Connect to Tableau Server / Cloud to Export or Import Content")
-st.markdown("---")
-
-# ------------------------
-# Mode Selection
-# ------------------------
-mode = st.radio("📁 Select Mode", [
-    "Export Tableau Content", 
-    "Import Users & Groups", 
-    "Convert User Excel to User CSV",
-    "Download Workbooks",
-    "Upload Workbooks"
-])
-st.markdown("---")
-
-# ------------------------
-# Connection Details
-# ------------------------
-if mode in ["Export Tableau Content", "Import Users & Groups", "Download Workbooks", "Upload Workbooks"]:
-    st.subheader("🖥️ Tableau Connection Details")
-    server_url = st.text_input("Tableau Server/Cloud URL", "https://prod-apsoutheast-b.online.tableau.com")
-    site_content_url = st.text_input("Site Content URL (Leave empty for Default site)", "")
-    auth_method = st.selectbox("🔑 Authentication Method", ["PAT (Personal Access Token)", "Username & Password"])
+def show_header():
+    st.markdown("""
+    <div class="main-header">
+        <div class="title-section">
+            <h1>Tableau Migration Toolkit</h1>
+            <p class="subtitle">Streamline your Tableau content migration with powerful automation</p>
+        </div>
+        <div class="logo-section">
+            <img src="https://www.tableau.com/sites/default/files/pages/tableau-logo.png" width="120">
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("---")
+
+# ------------------------
+# Sidebar Navigation
+# ------------------------
+def sidebar_navigation():
+    with st.sidebar:
+        st.markdown("""
+        <div class="sidebar-header">
+            <h2>Navigation</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        mode = st.radio(
+            "Select Operation",
+            [
+                "📤 Export Content", 
+                "📥 Import Users/Groups", 
+                "🔄 Convert User Format",
+                "⬇️ Download Workbooks",
+                "⬆️ Upload Workbooks"
+            ],
+            key="nav_mode"
+        )
+        
+        st.markdown("---")
+        
+        st.markdown("""
+        <div class="sidebar-footer">
+            <p class="version">Version 2.0</p>
+            <p class="author">Developed by Data Ops Team</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    return mode
+
+# ------------------------
+# Connection Manager
+# ------------------------
+def connection_manager():
+    colored_header("Tableau Server Connection", "Provide your Tableau Server/Cloud credentials", "#4B8BBE")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        server_url = st.text_input("Server URL", "https://prod-apsoutheast-b.online.tableau.com", 
+                                 help="URL of your Tableau Server or Cloud instance")
+        site_content_url = st.text_input("Site Content URL", "",
+                                       help="Leave empty for Default site or enter site content URL")
+    
+    with col2:
+        auth_method = st.selectbox("Authentication Method", 
+                                 ["PAT (Personal Access Token)", "Username & Password"],
+                                 help="Choose your preferred authentication method")
+        
+        if auth_method == "PAT (Personal Access Token)":
+            token_name = st.text_input("PAT Name", help="Name of your Personal Access Token")
+            token_value = st.text_input("PAT Secret", type="password", help="Secret value of your PAT")
+            auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
+        else:
+            username = st.text_input("Username", help="Your Tableau username")
+            password = st.text_input("Password", type="password", help="Your Tableau password")
+            auth = TSC.TableauAuth(username, password, site_id=site_content_url)
+    
+    st.markdown("---")
+    return auth, server_url, site_content_url
+
+# ------------------------
+# Export Functions
+# ------------------------
+def export_content(auth):
+    try:
+        with st.spinner("🔐 Connecting to Tableau Server..."):
+            server = connect_to_tableau(auth)
+        st.success("✅ Connection established successfully")
+        
+        colored_header("Export Options", "Select what you want to export", "#2e7d32")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("👥 Export Users", help="Export all users with their roles and details"):
+                export_users(server)
+        
+        with col2:
+            if st.button("👪 Export Groups", help="Export all groups with their IDs"):
+                export_groups(server)
+        
+        with col3:
+            if st.button("📂 Export Projects", help="Export all projects with descriptions"):
+                export_projects(server)
+        
+        col4, col5, col6 = st.columns(3)
+        
+        with col4:
+            if st.button("📊 Export Workbooks", help="Export workbook metadata"):
+                export_workbooks(server)
+        
+        with col5:
+            if st.button("📈 Export Datasources", help="Export datasource metadata"):
+                export_datasources(server)
+        
+        with col6:
+            if st.button("🔄 Refresh Connection", help="Reconnect to Tableau Server"):
+                server.auth.sign_out()
+                st.experimental_rerun()
+        
+        server.auth.sign_out()
+        st.info("🔒 Connection closed successfully")
+    
+    except Exception as e:
+        st.error(f"❌ Connection failed: {str(e)}")
+
+def export_users(server):
+    with st.spinner("Fetching users..."):
+        users, _ = server.users.get()
+        data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
+        headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
+        to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
+
+def export_groups(server):
+    with st.spinner("Fetching groups..."):
+        groups, _ = server.groups.get()
+        data = [[g.name, g.id] for g in groups]
+        headers = ["Group Name", "Group ID"]
+        to_csv_download(data, headers, "groups.csv", "⬇️ Download Groups")
+
+def export_projects(server):
+    with st.spinner("Fetching projects..."):
+        projects, _ = server.projects.get()
+        data = [[p.name, p.description, p.content_permissions] for p in projects]
+        headers = ["Name", "Description", "Content Permissions"]
+        to_csv_download(data, headers, "projects.csv", "⬇️ Download Projects")
+
+def export_workbooks(server):
+    with st.spinner("Fetching workbooks..."):
+        workbooks, _ = server.workbooks.get()
+        data = [[w.name, w.owner_id, w.project_name, w.created_at, w.updated_at] for w in workbooks]
+        headers = ["Workbook Name", "Owner ID", "Project", "Created At", "Updated At"]
+        to_csv_download(data, headers, "workbooks.csv", "⬇️ Download Workbooks")
+
+def export_datasources(server):
+    with st.spinner("Fetching datasources..."):
+        datasources, _ = server.datasources.get()
+        data = [[d.name, d.owner_id, d.project_name, d.created_at, d.updated_at] for d in datasources]
+        headers = ["Datasource Name", "Owner ID", "Project", "Created At", "Updated At"]
+        to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
+
+# ------------------------
+# Import Functions
+# ------------------------
+def import_content(auth):
+    colored_header("Import Content", "Upload your CSV files to import users or groups", "#1565c0")
+    
+    import_type = st.radio(
+        "Select Import Type",
+        ["👥 Users", "👪 Groups"],
+        horizontal=True
+    )
+    
+    uploaded_file = st.file_uploader(
+        f"Upload {import_type.lower()} CSV file",
+        type="csv",
+        help="Ensure your CSV matches the required format"
+    )
+    
+    if uploaded_file:
+        st.success("✅ File uploaded successfully")
+        df = pd.read_csv(uploaded_file)
+        
+        with st.expander("📋 Preview Data"):
+            st.dataframe(df.head())
+        
+        if st.button(f"🚀 Import {import_type}", type="primary"):
+            run_import(import_type.strip(), uploaded_file, auth)
+
+# ------------------------
+# Converter Functions
+# ------------------------
+def convert_user_format():
+    colored_header("User Format Converter", "Convert Excel user exports to Tableau-compatible CSV", "#6a1b9a")
+    
+    st.info("""
+    This tool converts Excel files exported from Tableau Server to the CSV format required for user imports.
+    Upload your Excel file below to convert it.
+    """)
+    
+    uploaded_file = st.file_uploader(
+        "Upload Excel File",
+        type=["xlsx", "xls"],
+        help="Upload an Excel file exported from Tableau Server"
+    )
+    
+    if uploaded_file:
+        st.success("✅ File uploaded successfully")
+        df = pd.read_excel(uploaded_file)
+        
+        with st.expander("📋 Preview Original Data"):
+            st.dataframe(df.head())
+        
+        if st.button("🔃 Convert to CSV", type="primary"):
+            convert_excel_to_csv(uploaded_file)
+
+# ------------------------
+# Workbook Download Functions
+# ------------------------
+def download_workbooks_ui(auth):
+    colored_header("Workbook Downloader", "Download workbooks from Tableau Server", "#00838f")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        project_filter = st.text_input(
+            "Filter by Project Name",
+            help="Leave empty to download from all projects"
+        )
+    
+    with col2:
+        workbook_filter = st.text_input(
+            "Filter by Workbook Name",
+            help="Leave empty to download all workbooks"
+        )
+    
+    if st.button("🔍 Search Workbooks", type="primary"):
+        with st.spinner("Searching for matching workbooks..."):
+            download_workbooks(auth, project_filter, workbook_filter)
+
+# ------------------------
+# Workbook Upload Functions
+# ------------------------
+def upload_workbooks_ui(auth):
+    colored_header("Workbook Uploader", "Upload workbooks to Tableau Server", "#2e7d32")
+    
+    project_option = st.radio(
+        "Project Selection",
+        ["Select existing project", "Create new project"],
+        horizontal=True
+    )
+    
+    project_name = None
+    if project_option == "Create new project":
+        project_name = st.text_input("New Project Name")
+    else:
+        with st.spinner("Fetching projects..."):
+            try:
+                server = connect_to_tableau(auth)
+                projects, _ = server.projects.get()
+                project_names = [p.name for p in projects]
+                selected_project = st.selectbox("Select Project", project_names)
+                project_id = next(p.id for p in projects if p.name == selected_project)
+                server.auth.sign_out()
+            except Exception as e:
+                st.error(f"Failed to fetch projects: {str(e)}")
+    
+    uploaded_files = st.file_uploader(
+        "Upload Workbook Files (.twbx or .twb)",
+        type=["twbx", "twb"],
+        accept_multiple_files=True,
+        help="Select one or more workbook files to upload"
+    )
+    
+    if uploaded_files and st.button("🚀 Upload Workbooks", type="primary"):
+        upload_workbooks(auth, project_name if project_name else selected_project)
 
 # ------------------------
 # Helper Functions
@@ -40,440 +335,165 @@ if mode in ["Export Tableau Content", "Import Users & Groups", "Download Workboo
 def to_csv_download(data: list, headers: list, filename: str, label: str):
     df = pd.DataFrame(data, columns=headers)
     csv = df.to_csv(index=False)
-    st.download_button(label=label, data=csv, file_name=filename, mime="text/csv")
+    st.download_button(
+        label=label,
+        data=csv,
+        file_name=filename,
+        mime="text/csv",
+        help=f"Download {filename}"
+    )
 
 def connect_to_tableau(auth):
     server = TSC.Server(server_url, use_server_version=True)
     server.auth.sign_in(auth)
     return server
 
-def get_tableau_auth():
-    if auth_method == "PAT (Personal Access Token)":
-        token_name = st.text_input("PAT Name")
-        token_value = st.text_input("PAT Secret", type="password")
-        return TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
-    else:
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        return TSC.TableauAuth(username, password, site_id=site_content_url)
-
 # ------------------------
-# Export Functions
+# Main App Logic
 # ------------------------
-def export_users(server):
-    users, _ = server.users.get()
-    data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
-    headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
-    to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
-
-def export_groups(server):
-    groups, _ = server.groups.get()
-    data = [[g.name, g.id] for g in groups]
-    headers = ["Group Name", "Group ID"]
-    to_csv_download(data, headers, "groups.csv", "⬇️ Download Groups")
-
-def export_projects(server):
-    projects, _ = server.projects.get()
-    data = [[p.name, p.description, p.content_permissions] for p in projects]
-    headers = ["Name", "Description", "Content Permissions"]
-    to_csv_download(data, headers, "projects.csv", "⬇️ Download Projects")
-
-def export_workbooks(server):
-    workbooks, _ = server.workbooks.get()
-    data = [[w.name, w.owner_id, w.project_name, w.created_at, w.updated_at] for w in workbooks]
-    headers = ["Workbook Name", "Owner ID", "Project", "Created At", "Updated At"]
-    to_csv_download(data, headers, "workbooks.csv", "⬇️ Download Workbooks")
-
-def export_datasources(server):
-    datasources, _ = server.datasources.get()
-    data = [[d.name, d.owner_id, d.project_name, d.created_at, d.updated_at] for d in datasources]
-    headers = ["Datasource Name", "Owner ID", "Project", "Created At", "Updated At"]
-    to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
-
-# ------------------------
-# Export Mode Logic
-# ------------------------
-def run_export(auth):
-    try:
-        with st.spinner("🔄 Connecting to Tableau..."):
-            server = connect_to_tableau(auth)
-        st.success("✅ Connected successfully!")
-
-        with st.expander("📋 Export Tableau Content (click to expand)"):
-            export_users(server)
-            export_groups(server)
-            export_projects(server)
-            export_workbooks(server)
-            export_datasources(server)
-
-        server.auth.sign_out()
-        st.info("🔐 Signed out successfully.")
-    except Exception as e:
-        st.error(f"❌ Connection failed: {str(e)}")
-
-# ------------------------
-# Import Mode Logic
-# ------------------------
-def run_import(import_type, uploaded_file, auth):
-    if not uploaded_file:
-        st.warning("⚠️ Please upload a CSV file before importing.")
-        return
-
-    try:
-        with st.spinner("🔄 Connecting to Tableau..."):
-            server = connect_to_tableau(auth)
-        st.success("✅ Connected to Tableau")
-
-        df = pd.read_csv(uploaded_file)
-        st.write("📄 CSV Preview:", df.head())
-
-        if import_type == "Users":
-            for _, row in df.iterrows():
-                try:
-                    row_dict = row.dropna().to_dict()
-                    user_kwargs = {}
-                    valid_keys = {
-                        "name", "site_role", "full_name", "email",
-                        "auth_setting", "external_auth_user_id", "locale",
-                        "password", "password_never_expires", "must_change_password",
-                        "content_admin", "server_role", "tags"
-                    }
-
-                    for k, v in row_dict.items():
-                        key_lower = k.lower()
-                        if key_lower in valid_keys:
-                            user_kwargs[key_lower] = v
-
-                    if "name" not in user_kwargs or "site_role" not in user_kwargs:
-                        st.warning(f"Skipping row because 'name' or 'site_role' missing: {row_dict}")
-                        continue
-
-                    new_user = TSC.UserItem(
-                        name=user_kwargs.get("name"),
-                        site_role=user_kwargs.get("site_role"),
-                        full_name=user_kwargs.get("full_name"),
-                        email=user_kwargs.get("email"),
-                        auth_setting=user_kwargs.get("auth_setting"),
-                        external_auth_user_id=user_kwargs.get("external_auth_user_id"),
-                        locale=user_kwargs.get("locale"),
-                        password=user_kwargs.get("password"),
-                        password_never_expires=user_kwargs.get("password_never_expires"),
-                        must_change_password=user_kwargs.get("must_change_password"),
-                        content_admin=user_kwargs.get("content_admin"),
-                        server_role=user_kwargs.get("server_role"),
-                        tags=user_kwargs.get("tags"),
-                    )
-                    server.users.add(new_user)
-
-                except Exception as e:
-                    st.warning(f"⚠️ Could not add user {row.get('name', 'unknown')}: {e}")
-
-            st.success("✅ All users imported!")
-
-        elif import_type == "Groups":
-            for _, row in df.iterrows():
-                try:
-                    row_dict = row.dropna().to_dict()
-                    group_name = None
-                    for val in row_dict.values():
-                        if isinstance(val, str) and val.strip():
-                            group_name = val.strip()
-                            break
-
-                    if not group_name:
-                        st.warning(f"Skipping row with no valid group name: {row_dict}")
-                        continue
-
-                    new_group = TSC.GroupItem(name=group_name)
-                    server.groups.create(new_group)
-
-                except Exception as e:
-                    st.warning(f"⚠️ Could not create group {group_name if group_name else 'unknown'}: {e}")
-
-            st.success("✅ All groups imported!")
-
-        server.auth.sign_out()
-        st.info("🔐 Signed out successfully.")
-
-    except Exception as e:
-        st.error(f"❌ Import failed: {str(e)}")
-
-# ------------------------
-# Excel to CSV Conversion Logic
-# ------------------------
-def convert_excel_to_csv(uploaded_file):
-    if not uploaded_file:
-        st.warning("⚠️ Please upload an Excel file first.")
-        return
-    
-    try:
-        df = pd.read_excel(uploaded_file)
-        st.write("📄 Excel Preview:", df.head())
-        
-        transformed_data = []
-        
-        for _, row in df.iterrows():
-            email = row.get('Email', '')
-            site_role = row.get('Site Role', '')
+def main():
+    # Create style.css if it doesn't exist
+    if not os.path.exists("style.css"):
+        with open("style.css", "w") as f:
+            f.write("""
+            /* Main header styling */
+            .main-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 1rem 0;
+            }
             
-            simplified_role = ''
-            fifth_column = 'None'
-            sixth_column = 'False'
+            .title-section h1 {
+                color: #2c3e50;
+                margin-bottom: 0.5rem;
+            }
             
-            if 'SiteAdministratorCreator' in site_role:
-                simplified_role = 'Creator'
-                fifth_column = 'site'
-                sixth_column = 'True'
-            elif 'ExplorerCanPublish' in site_role:
-                simplified_role = 'Explorer'
-                sixth_column = 'True'
-            elif 'Viewer' in site_role:
-                simplified_role = 'Viewer'
-            elif 'SiteAdministratorExplorer' in site_role:
-                simplified_role = 'Explorer'
-                fifth_column = 'site'
-                sixth_column = 'True'
-            else:
-                simplified_role = site_role
+            .subtitle {
+                color: #7f8c8d;
+                font-size: 1.1rem;
+                margin-top: 0;
+            }
             
-            transformed_data.append([
-                email, '', '', simplified_role, fifth_column, sixth_column
-            ])
-        
-        csv_data = pd.DataFrame(transformed_data).to_csv(index=False, header=False)
-        
-        st.download_button(
-            label="⬇️ Download Converted CSV",
-            data=csv_data,
-            file_name="converted_users.csv",
-            mime="text/csv"
-        )
-        
-        st.success("✅ Conversion complete!")
-        
-    except Exception as e:
-        st.error(f"❌ Conversion failed: {str(e)}")
-
-# ------------------------
-# Download Workbooks Logic
-# ------------------------
-def download_workbooks(auth, project_filter=None, workbook_filter=None):
-    try:
-        with st.spinner("🔄 Connecting to Tableau..."):
-            server = connect_to_tableau(auth)
-        st.success("✅ Connected successfully!")
-
-        # Get all projects
-        projects, _ = server.projects.get()
-        
-        # Apply project filter if specified
-        if project_filter:
-            projects = [p for p in projects if project_filter.lower() in p.name.lower()]
-        
-        if not projects:
-            st.warning("No projects found matching your criteria")
-            return
-
-        # Get workbooks for each project
-        all_workbooks = []
-        for project in projects:
-            workbooks, _ = server.workbooks.get()
-            project_workbooks = [w for w in workbooks if w.project_name == project.name]
+            /* Colored headers */
+            .colored-header {
+                padding: 0.5rem 1rem;
+                margin: 1.5rem 0 1rem 0;
+                background-color: #f8f9fa;
+                border-radius: 4px;
+            }
             
-            # Apply workbook filter if specified
-            if workbook_filter:
-                project_workbooks = [w for w in project_workbooks if workbook_filter.lower() in w.name.lower()]
+            .colored-header h2 {
+                margin: 0;
+                color: #2c3e50;
+            }
             
-            all_workbooks.extend(project_workbooks)
-
-        if not all_workbooks:
-            st.warning("No workbooks found matching your criteria")
-            return
-
-        st.success(f"Found {len(all_workbooks)} workbooks matching your criteria")
-        
-        # Download all matching workbooks
-        for wb in all_workbooks:
-            try:
-                workbook_path = server.workbooks.download(wb.id)
-                with open(workbook_path, 'rb') as f:
-                    workbook_data = f.read()
-                
-                st.download_button(
-                    label=f"⬇️ Download {wb.name} (Project: {wb.project_name})",
-                    data=workbook_data,
-                    file_name=f"{wb.name}.twbx",
-                    mime="application/octet-stream"
-                )
-                os.remove(workbook_path)
-            except Exception as e:
-                st.error(f"Failed to download {wb.name}: {str(e)}")
-
-        server.auth.sign_out()
-        st.info("🔐 Signed out successfully.")
-
-    except Exception as e:
-        st.error(f"❌ Download failed: {str(e)}")
-
-# ------------------------
-# Upload Workbooks Logic
-# ------------------------
-def upload_workbooks(auth, project_name=None):
-    try:
-        with st.spinner("🔄 Connecting to Tableau..."):
-            server = connect_to_tableau(auth)
-        st.success("✅ Connected successfully!")
-
-        # Get or create project
-        if project_name:
-            projects, _ = server.projects.get()
-            existing_project = next((p for p in projects if p.name.lower() == project_name.lower()), None)
+            .colored-header p {
+                margin: 0.25rem 0 0 0;
+                color: #7f8c8d;
+                font-size: 0.9rem;
+            }
             
-            if existing_project:
-                project_id = existing_project.id
-                st.info(f"Using existing project: {project_name}")
-            else:
-                new_project = TSC.ProjectItem(name=project_name)
-                project = server.projects.create(new_project)
-                project_id = project.id
-                st.success(f"Created new project: {project_name}")
-        else:
-            projects, _ = server.projects.get()
-            project_names = [p.name for p in projects]
-            selected_project = st.selectbox("Select Project", project_names)
-            project_id = next(p.id for p in projects if p.name == selected_project)
+            /* Sidebar styling */
+            .sidebar-header {
+                padding: 0.5rem 0;
+                margin-bottom: 1rem;
+                border-bottom: 1px solid #eee;
+            }
+            
+            .sidebar-header h2 {
+                color: #2c3e50;
+                margin: 0;
+            }
+            
+            .sidebar-footer {
+                margin-top: 2rem;
+                padding-top: 1rem;
+                border-top: 1px solid #eee;
+                font-size: 0.8rem;
+                color: #7f8c8d;
+            }
+            
+            /* Feature cards */
+            .feature-card {
+                background: white;
+                border-radius: 8px;
+                padding: 1.5rem;
+                margin-bottom: 1rem;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                transition: transform 0.2s;
+            }
+            
+            .feature-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            }
+            
+            .feature-icon {
+                font-size: 2rem;
+                margin-bottom: 1rem;
+                color: #3498db;
+            }
+            
+            .feature-card h3 {
+                margin-top: 0;
+                color: #2c3e50;
+            }
+            
+            .feature-card p {
+                color: #7f8c8d;
+                margin-bottom: 0;
+            }
+            
+            /* Button styling */
+            .stButton>button {
+                border-radius: 4px;
+                padding: 0.5rem 1rem;
+                transition: all 0.3s;
+            }
+            
+            .stButton>button:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            }
+            
+            /* File uploader styling */
+            .stFileUploader>div>div>div>div {
+                border: 2px dashed #3498db;
+                border-radius: 8px;
+                padding: 2rem;
+                background-color: #f8f9fa;
+            }
+            
+            /* Spinner styling */
+            .stSpinner>div {
+                margin: 0 auto;
+            }
+            """)
 
-        # File upload
-        uploaded_files = st.file_uploader(
-            "📤 Upload Workbook Files (.twbx or .twb)",
-            type=["twbx", "twb"],
-            accept_multiple_files=True
-        )
-
-        if uploaded_files and st.button("🚀 Upload Workbooks"):
-            for uploaded_file in uploaded_files:
-                try:
-                    file_name = uploaded_file.name
-                    file_content = uploaded_file.read()
-                    
-                    # Create a temporary file
-                    temp_path = f"temp_{file_name}"
-                    with open(temp_path, 'wb') as f:
-                        f.write(file_content)
-                    
-                    # Upload to server
-                    new_workbook = TSC.WorkbookItem(
-                        project_id=project_id, 
-                        name=os.path.splitext(file_name)[0]
-                    )
-                    new_workbook = server.workbooks.publish(
-                        new_workbook,
-                        temp_path,
-                        'Overwrite'
-                    )
-                    
-                    os.remove(temp_path)
-                    st.success(f"✅ Successfully uploaded: {file_name}")
-                
-                except Exception as e:
-                    st.error(f"❌ Failed to upload {file_name}: {str(e)}")
-
-        server.auth.sign_out()
-        st.info("🔐 Signed out successfully.")
-
-    except Exception as e:
-        st.error(f"❌ Upload failed: {str(e)}")
+    show_header()
+    mode = sidebar_navigation()
+    
+    if mode in ["📤 Export Content", "📥 Import Users/Groups", "⬇️ Download Workbooks", "⬆️ Upload Workbooks"]:
+        auth, server_url, site_content_url = connection_manager()
+    
+    if mode == "📤 Export Content":
+        export_content(auth)
+    
+    elif mode == "📥 Import Users/Groups":
+        import_content(auth)
+    
+    elif mode == "🔄 Convert User Format":
+        convert_user_format()
+    
+    elif mode == "⬇️ Download Workbooks":
+        download_workbooks_ui(auth)
+    
+    elif mode == "⬆️ Upload Workbooks":
+        upload_workbooks_ui(auth)
 
 # ------------------------
-# Mode Handling
+# Run the App
 # ------------------------
-if mode == "Export Tableau Content":
-    auth = get_tableau_auth()
-    if st.button("🔌 Export with Selected Authentication"):
-        run_export(auth)
-
-elif mode == "Import Users & Groups":
-    st.subheader("📥 Select What to Import")
-    import_type = st.selectbox("Import Type", ["Users", "Groups"])
-
-    if import_type == "Users":
-        uploaded_file = st.file_uploader("📤 Upload Users CSV (any format with needed columns)", type="csv")
-    else:
-        uploaded_file = st.file_uploader("📤 Upload Groups CSV (any format with group names)", type="csv")
-
-    st.markdown("---")
-    st.subheader("🔐 Tableau Credentials")
-    
-    auth = get_tableau_auth()
-    if st.button("🚀 Import Now"):
-        run_import(import_type, uploaded_file, auth)
-
-elif mode == "Convert User Excel to User CSV":
-    st.subheader("🔄 Convert User Excel to User CSV")
-    st.markdown("Upload an Excel file exported from Tableau to convert it to the required CSV format.")
-    
-    uploaded_file = st.file_uploader("📤 Upload Excel File", type=["xlsx", "xls"])
-    
-    if st.button("🔃 Convert Now"):
-        convert_excel_to_csv(uploaded_file)
-
-elif mode == "Download Workbooks":
-    st.subheader("📥 Download Workbooks from Tableau Server")
-    
-    # Filter options
-    col1, col2 = st.columns(2)
-    with col1:
-        project_filter = st.text_input("Filter by Project Name (leave empty for all)")
-    with col2:
-        workbook_filter = st.text_input("Filter by Workbook Name (leave empty for all)")
-    
-    st.markdown("---")
-    st.subheader("🔐 Tableau Credentials")
-    
-    auth = get_tableau_auth()
-    if st.button("🔍 Connect and Download Workbooks"):
-        download_workbooks(auth, project_filter, workbook_filter)
-
-elif mode == "Upload Workbooks":
-    st.subheader("📤 Upload Workbooks to Tableau Server")
-    
-    # Project selection
-    project_option = st.radio(
-        "Project Selection",
-        ["Select existing project", "Create new project"],
-        index=0
-    )
-    
-    project_name = None
-    if project_option == "Create new project":
-        project_name = st.text_input("New Project Name")
-    
-    st.markdown("---")
-    st.subheader("🔐 Tableau Credentials")
-    
-    auth = get_tableau_auth()
-    if st.button("🔍 Connect and Upload Workbooks"):
-        upload_workbooks(auth, project_name)
-
-# ------------------------
-# Footer
-# ------------------------
-st.markdown(
-    """
-    <style>
-    .footer {
-        position: fixed;
-        bottom: 0;
-        width: 100%;
-        background-color: #f1f1f1;
-        color: #333;
-        text-align: center;
-        padding: 10px;
-    }
-    </style>
-    <div class="footer">
-        Developed with ❤️ by <strong>Mohd Sajjad</strong>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+if __name__ == "__main__":
+    main()
