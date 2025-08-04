@@ -3,7 +3,7 @@ import tableauserverclient as TSC
 import pandas as pd
 import os
 from io import BytesIO
-import time
+import base64
 
 # ------------------------
 # Custom CSS Styling
@@ -175,27 +175,6 @@ def inject_css():
             border-radius: 4px;
             margin: 1rem 0;
         }
-        
-        /* Table styling */
-        .stDataFrame {
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-        
-        /* Progress bar */
-        .stProgress>div>div>div {
-            background: linear-gradient(90deg, #4B8BBE 0%, #306998 100%);
-        }
-        
-        /* Custom tabs */
-        .st-eb {
-            gap: 0.5rem;
-        }
-        
-        .st-eb button {
-            border-radius: 6px !important;
-            padding: 0.5rem 1rem !important;
-        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -215,24 +194,17 @@ inject_css()
 # ------------------------
 # Helper Functions
 # ------------------------
-def to_csv_download(data: list, headers: list, filename: str, label: str):
+@st.cache_data
+def to_csv_download(data: list, headers: list, filename: str):
     df = pd.DataFrame(data, columns=headers)
-    csv = df.to_csv(index=False)
-    st.download_button(
-        label=label,
-        data=csv,
-        file_name=filename,
-        mime="text/csv",
-        help=f"Download {filename}",
-        key=f"dl_{filename}"
-    )
+    return df.to_csv(index=False).encode('utf-8')
 
 def connect_to_tableau(auth, server_url):
     server = TSC.Server(server_url, use_server_version=True)
     server.auth.sign_in(auth)
     return server
 
-def show_connection_status(server):
+def show_connection_status(server, auth):
     with st.expander("🔌 Connection Status", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
@@ -250,50 +222,82 @@ def export_users(server):
         users, _ = server.users.get()
         data = [[u.name, u.fullname, u.email, u.site_role, u.last_login] for u in users]
         headers = ["Name", "Full Name", "Email", "Site Role", "Last Login"]
-        to_csv_download(data, headers, "users.csv", "⬇️ Download Users")
+        csv = to_csv_download(data, headers, "users.csv")
+        st.download_button(
+            label="⬇️ Download Users",
+            data=csv,
+            file_name="users.csv",
+            mime="text/csv",
+            key="dl_users"
+        )
 
 def export_groups(server):
     with st.spinner("Fetching groups..."):
         groups, _ = server.groups.get()
         data = [[g.name, g.id] for g in groups]
         headers = ["Group Name", "Group ID"]
-        to_csv_download(data, headers, "groups.csv", "⬇️ Download Groups")
+        csv = to_csv_download(data, headers, "groups.csv")
+        st.download_button(
+            label="⬇️ Download Groups",
+            data=csv,
+            file_name="groups.csv",
+            mime="text/csv",
+            key="dl_groups"
+        )
 
 def export_projects(server):
     with st.spinner("Fetching projects..."):
         projects, _ = server.projects.get()
         data = [[p.name, p.description, p.content_permissions] for p in projects]
         headers = ["Name", "Description", "Content Permissions"]
-        to_csv_download(data, headers, "projects.csv", "⬇️ Download Projects")
+        csv = to_csv_download(data, headers, "projects.csv")
+        st.download_button(
+            label="⬇️ Download Projects",
+            data=csv,
+            file_name="projects.csv",
+            mime="text/csv",
+            key="dl_projects"
+        )
 
 def export_workbooks(server):
     with st.spinner("Fetching workbooks..."):
         workbooks, _ = server.workbooks.get()
         data = [[w.name, w.owner_id, w.project_name, w.created_at, w.updated_at] for w in workbooks]
         headers = ["Workbook Name", "Owner ID", "Project", "Created At", "Updated At"]
-        to_csv_download(data, headers, "workbooks.csv", "⬇️ Download Workbooks")
+        csv = to_csv_download(data, headers, "workbooks.csv")
+        st.download_button(
+            label="⬇️ Download Workbooks",
+            data=csv,
+            file_name="workbooks.csv",
+            mime="text/csv",
+            key="dl_workbooks"
+        )
 
 def export_datasources(server):
     with st.spinner("Fetching datasources..."):
         datasources, _ = server.datasources.get()
         data = [[d.name, d.owner_id, d.project_name, d.created_at, d.updated_at] for d in datasources]
         headers = ["Datasource Name", "Owner ID", "Project", "Created At", "Updated At"]
-        to_csv_download(data, headers, "datasources.csv", "⬇️ Download Datasources")
+        csv = to_csv_download(data, headers, "datasources.csv")
+        st.download_button(
+            label="⬇️ Download Datasources",
+            data=csv,
+            file_name="datasources.csv",
+            mime="text/csv",
+            key="dl_datasources"
+        )
 
 # ------------------------
 # Download Workbook Functions
 # ------------------------
 def download_workbooks(auth, server_url):
-    """Enhanced workbook download function with better UX and error handling"""
     try:
-        # Connection section
         with st.spinner("🔄 Establishing secure connection to Tableau Server..."):
             server = connect_to_tableau(auth, server_url)
             st.toast("✅ Connection established successfully!", icon="✅")
         
-        show_connection_status(server)
+        show_connection_status(server, auth)
 
-        # Download options section
         st.markdown("""
         <div class="colored-header">
             <h2>📥 Download Options</h2>
@@ -307,10 +311,9 @@ def download_workbooks(auth, server_url):
              "Download specific workbook",
              "Search and download workbooks"],
             horizontal=True,
-            help="Choose whether to download all workbooks from a project or select specific ones"
+            key="download_option"
         )
 
-        # Get projects with progress indicator
         with st.spinner("🔍 Loading available projects..."):
             projects, _ = server.projects.get()
             if not projects:
@@ -321,20 +324,19 @@ def download_workbooks(auth, server_url):
             selected_project = st.selectbox(
                 "Select project:",
                 project_names,
-                help="Select the project containing the workbooks you want to download"
+                help="Select the project containing the workbooks you want to download",
+                key="project_select"
             )
 
-        # Main download logic
         if download_option == "Download all workbooks from a project":
             _download_all_workbooks(server, selected_project)
             
         elif download_option == "Download specific workbook":
             _download_single_workbook(server, selected_project)
             
-        else:  # Search and download workbooks
+        else:
             _search_and_download_workbooks(server, selected_project)
 
-        # Clean up
         server.auth.sign_out()
         st.toast("🔐 Session ended successfully", icon="🔒")
 
@@ -344,7 +346,6 @@ def download_workbooks(auth, server_url):
         st.error(f"❌ Unexpected error: {str(e)}")
 
 def _download_all_workbooks(server, project_name):
-    """Helper function to download all workbooks from a project"""
     with st.spinner(f"🔍 Scanning project '{project_name}' for workbooks..."):
         workbooks, _ = server.workbooks.get()
         project_workbooks = [w for w in workbooks if w.project_name == project_name]
@@ -355,7 +356,6 @@ def _download_all_workbooks(server, project_name):
         
         st.success(f"Found {len(project_workbooks)} workbooks in '{project_name}'")
         
-        # Progress bar for multiple downloads
         progress_bar = st.progress(0)
         total = len(project_workbooks)
         
@@ -369,7 +369,6 @@ def _download_all_workbooks(server, project_name):
                     with open(workbook_path, 'rb') as f:
                         workbook_data = f.read()
                     
-                    # Create download button with additional info
                     with st.container():
                         col1, col2 = st.columns([3, 1])
                         with col1:
@@ -381,8 +380,7 @@ def _download_all_workbooks(server, project_name):
                                 data=workbook_data,
                                 file_name=f"{wb.name}.twbx",
                                 mime="application/octet-stream",
-                                key=f"dl_{wb.id}",
-                                help=f"Download {wb.name}"
+                                key=f"dl_{wb.id}"
                             )
                     
                     os.remove(workbook_path)
@@ -395,7 +393,6 @@ def _download_all_workbooks(server, project_name):
         st.toast(f"🎉 Downloaded {len(project_workbooks)} workbooks!", icon="🎉")
 
 def _download_single_workbook(server, project_name):
-    """Helper function to download a specific workbook"""
     with st.spinner(f"🔍 Loading workbooks from '{project_name}'..."):
         workbooks, _ = server.workbooks.get()
         project_workbooks = [w for w in workbooks if w.project_name == project_name]
@@ -408,12 +405,12 @@ def _download_single_workbook(server, project_name):
         selected_workbook = st.selectbox(
             "Select workbook to download:",
             workbook_names,
-            help="Select the specific workbook you want to download"
+            help="Select the specific workbook you want to download",
+            key="workbook_select"
         )
         
         workbook = next(w for w in project_workbooks if w.name == selected_workbook)
         
-        # Show workbook metadata
         with st.expander("📊 Workbook Details", expanded=True):
             col1, col2 = st.columns(2)
             with col1:
@@ -423,7 +420,7 @@ def _download_single_workbook(server, project_name):
                 st.metric("Created", workbook.created_at)
                 st.metric("Last Updated", workbook.updated_at)
         
-        if st.button("🚀 Download Workbook", type="primary"):
+        if st.button("🚀 Download Workbook", type="primary", key="download_wb"):
             with st.spinner(f"⏳ Downloading '{selected_workbook}'..."):
                 try:
                     workbook_path = server.workbooks.download(workbook.id)
@@ -445,7 +442,6 @@ def _download_single_workbook(server, project_name):
                     st.error(f"❌ Download failed: {str(e)}")
 
 def _search_and_download_workbooks(server, project_name):
-    """Helper function for search and download functionality"""
     st.markdown("""
     <div class="colored-header">
         <h2>🔍 Search Workbooks</h2>
@@ -455,7 +451,8 @@ def _search_and_download_workbooks(server, project_name):
     
     search_query = st.text_input(
         "Search by workbook name:",
-        help="Enter part of the workbook name to filter results"
+        help="Enter part of the workbook name to filter results",
+        key="workbook_search"
     )
     
     with st.spinner(f"🔍 Searching workbooks in '{project_name}'..."):
@@ -474,7 +471,6 @@ def _search_and_download_workbooks(server, project_name):
         
         st.success(f"Found {len(project_workbooks)} matching workbooks")
         
-        # Display workbook list with checkboxes
         selected_workbooks = []
         for wb in project_workbooks:
             col1, col2 = st.columns([1, 4])
@@ -491,7 +487,8 @@ def _search_and_download_workbooks(server, project_name):
         
         if selected_workbooks and st.button(
             f"📥 Download {len(selected_workbooks)} Selected Workbooks",
-            type="primary"
+            type="primary",
+            key="download_selected"
         ):
             progress_bar = st.progress(0)
             total = len(selected_workbooks)
@@ -534,7 +531,6 @@ def show_welcome():
     
     st.markdown("---")
     
-    # Feature cards
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
@@ -570,7 +566,6 @@ def show_welcome():
     st.info("💡 Select an operation from the sidebar to get started")
 
 def main():
-    # Sidebar Navigation
     with st.sidebar:
         st.markdown("""
         <div class="sidebar-header">
@@ -586,8 +581,7 @@ def main():
              "📤 Export Content", 
              "📥 Import Users/Groups", 
              "🔄 Convert User Format",
-             "⬇️ Download Workbooks",
-             "⬆️ Upload Workbooks"],
+             "⬇️ Download Workbooks"],
             key="nav_mode"
         )
         
@@ -600,13 +594,11 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # Show welcome dashboard if selected
     if mode == "🏠 Dashboard":
         show_welcome()
         return
 
-    # Connection Manager (for modes that need Tableau connection)
-    if mode in ["📤 Export Content", "📥 Import Users/Groups", "⬇️ Download Workbooks", "⬆️ Upload Workbooks"]:
+    if mode in ["📤 Export Content", "📥 Import Users/Groups", "⬇️ Download Workbooks"]:
         st.markdown("""
         <div class="colored-header">
             <h2>Tableau Server Connection</h2>
@@ -617,27 +609,29 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             server_url = st.text_input("Server URL", "https://prod-apsoutheast-b.online.tableau.com", 
-                                     help="URL of your Tableau Server or Cloud instance")
+                                     help="URL of your Tableau Server or Cloud instance",
+                                     key="server_url")
             site_content_url = st.text_input("Site Content URL", "",
-                                           help="Leave empty for Default site or enter site content URL")
+                                           help="Leave empty for Default site or enter site content URL",
+                                           key="site_url")
         
         with col2:
             auth_method = st.selectbox("Authentication Method", 
                                      ["PAT (Personal Access Token)", "Username & Password"],
-                                     help="Choose your preferred authentication method")
+                                     help="Choose your preferred authentication method",
+                                     key="auth_method")
             
             if auth_method == "PAT (Personal Access Token)":
-                token_name = st.text_input("PAT Name", help="Name of your Personal Access Token")
-                token_value = st.text_input("PAT Secret", type="password", help="Secret value of your PAT")
+                token_name = st.text_input("PAT Name", help="Name of your Personal Access Token", key="pat_name")
+                token_value = st.text_input("PAT Secret", type="password", help="Secret value of your PAT", key="pat_value")
                 auth = TSC.PersonalAccessTokenAuth(token_name, token_value, site_id=site_content_url)
             else:
-                username = st.text_input("Username", help="Your Tableau username")
-                password = st.text_input("Password", type="password", help="Your Tableau password")
+                username = st.text_input("Username", help="Your Tableau username", key="username")
+                password = st.text_input("Password", type="password", help="Your Tableau password", key="password")
                 auth = TSC.TableauAuth(username, password, site_id=site_content_url)
         
         st.markdown("---")
 
-    # Mode Handling
     if mode == "📤 Export Content":
         try:
             with st.spinner("🔐 Connecting to Tableau Server..."):
@@ -651,7 +645,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
-            # Export cards in a grid
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -716,13 +709,15 @@ def main():
         import_type = st.radio(
             "Select Import Type",
             ["👥 Users", "👪 Groups"],
-            horizontal=True
+            horizontal=True,
+            key="import_type"
         )
         
         uploaded_file = st.file_uploader(
             f"Upload {import_type.lower()} CSV file",
             type="csv",
-            help="Ensure your CSV matches the required format"
+            help="Ensure your CSV matches the required format",
+            key="import_file"
         )
         
         if uploaded_file:
@@ -732,7 +727,7 @@ def main():
             with st.expander("📋 Preview Data", expanded=True):
                 st.dataframe(df.head())
             
-            if st.button(f"🚀 Import {import_type}", type="primary"):
+            if st.button(f"🚀 Import {import_type}", type="primary", key="import_button"):
                 try:
                     with st.spinner("🔄 Connecting to Tableau..."):
                         server = connect_to_tableau(auth, server_url)
@@ -755,7 +750,7 @@ def main():
                     elif import_type == "👪 Groups":
                         for _, row in df.iterrows():
                             try:
-                                group_name = row.iloc[0]  # Get first column value as group name
+                                group_name = row.iloc[0]
                                 if pd.notna(group_name):
                                     new_group = TSC.GroupItem(name=str(group_name))
                                     server.groups.create(new_group)
@@ -785,7 +780,8 @@ def main():
         uploaded_file = st.file_uploader(
             "Upload Excel File",
             type=["xlsx", "xls"],
-            help="Upload an Excel file exported from Tableau Server"
+            help="Upload an Excel file exported from Tableau Server",
+            key="convert_file"
         )
         
         if uploaded_file:
@@ -795,7 +791,7 @@ def main():
             with st.expander("📋 Preview Original Data", expanded=True):
                 st.dataframe(df.head())
             
-            if st.button("🔃 Convert to CSV", type="primary"):
+            if st.button("🔃 Convert to CSV", type="primary", key="convert_button"):
                 try:
                     transformed_data = []
                     
@@ -833,7 +829,8 @@ def main():
                         label="⬇️ Download Converted CSV",
                         data=csv_data,
                         file_name="converted_users.csv",
-                        mime="text/csv"
+                        mime="text/csv",
+                        key="download_converted"
                     )
                     
                     st.success("✅ Conversion complete!")
@@ -843,25 +840,6 @@ def main():
     
     elif mode == "⬇️ Download Workbooks":
         download_workbooks(auth, server_url)
-        
-    elif mode == "⬆️ Upload Workbooks":
-        st.markdown("""
-        <div class="colored-header">
-            <h2>Workbook Upload</h2>
-            <p>Upload workbooks to Tableau Server</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.warning("⚠️ Workbook upload functionality is coming soon!")
-        st.info("""
-        This feature will allow you to:
-        - Upload workbooks to specific projects
-        - Set permissions during upload
-        - Overwrite existing workbooks
-        - Monitor upload progress
-        
-        Check back in the next version for this functionality!
-        """)
 
 # ------------------------
 # Run the App
