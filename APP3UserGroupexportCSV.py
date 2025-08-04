@@ -3,6 +3,7 @@ import tableauserverclient as TSC
 import pandas as pd
 import os
 from io import BytesIO
+import time
 
 # ------------------------
 # Custom CSS Styling
@@ -10,17 +11,25 @@ from io import BytesIO
 def inject_css():
     st.markdown("""
     <style>
+        /* Main styles */
+        html, body, [class*="css"] {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
         /* Main header styling */
         .main-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 1rem 0;
+            border-bottom: 1px solid #e6e6e6;
+            margin-bottom: 2rem;
         }
         
         .title-section h1 {
             color: #2c3e50;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.25rem;
+            font-weight: 700;
         }
         
         .subtitle {
@@ -31,27 +40,53 @@ def inject_css():
         
         /* Colored headers */
         .colored-header {
-            padding: 0.5rem 1rem;
-            margin: 1.5rem 0 1rem 0;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-            border-left: 5px solid #4B8BBE;
+            padding: 1rem 1.5rem;
+            margin: 1.5rem 0 1.5rem 0;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border-left: 4px solid #4B8BBE;
         }
         
         .colored-header h2 {
             margin: 0;
             color: #2c3e50;
+            font-weight: 600;
         }
         
         .colored-header p {
             margin: 0.25rem 0 0 0;
             color: #7f8c8d;
-            font-size: 0.9rem;
+            font-size: 0.95rem;
+        }
+        
+        /* Card styling */
+        .feature-card {
+            padding: 1.5rem;
+            border-radius: 8px;
+            background: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+            border: 1px solid #e6e6e6;
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+        
+        .feature-card h3 {
+            color: #2c3e50;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
         
         /* Sidebar styling */
         .sidebar-header {
-            padding: 0.5rem 0;
+            padding: 1rem 0;
             margin-bottom: 1rem;
             border-bottom: 1px solid #eee;
         }
@@ -59,6 +94,7 @@ def inject_css():
         .sidebar-header h2 {
             color: #2c3e50;
             margin: 0;
+            font-weight: 600;
         }
         
         .sidebar-footer {
@@ -71,14 +107,30 @@ def inject_css():
         
         /* Button styling */
         .stButton>button {
-            border-radius: 4px;
+            border-radius: 6px;
             padding: 0.5rem 1rem;
             transition: all 0.3s;
+            border: none;
+            font-weight: 500;
         }
         
         .stButton>button:hover {
             transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        
+        .stButton>button.primary {
+            background: linear-gradient(135deg, #4B8BBE 0%, #306998 100%);
+            color: white;
+        }
+        
+        /* Input styling */
+        .stTextInput>div>div>input, 
+        .stTextArea>div>div>textarea,
+        .stSelectbox>div>div>select {
+            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
         }
         
         /* File uploader styling */
@@ -86,12 +138,63 @@ def inject_css():
             border: 2px dashed #3498db;
             border-radius: 8px;
             padding: 2rem;
-            background-color: #f8f9fa;
+            background-color: rgba(52, 152, 219, 0.05);
+            transition: all 0.3s;
+        }
+        
+        .stFileUploader>div>div>div>div:hover {
+            background-color: rgba(52, 152, 219, 0.1);
         }
         
         /* Spinner styling */
         .stSpinner>div {
             margin: 0 auto;
+        }
+        
+        /* Status indicators */
+        .status-success {
+            padding: 0.75rem 1rem;
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .status-warning {
+            padding: 0.75rem 1rem;
+            background-color: #fff8e1;
+            border-left: 4px solid #ffc107;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .status-error {
+            padding: 0.75rem 1rem;
+            background-color: #ffebee;
+            border-left: 4px solid #f44336;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        /* Table styling */
+        .stDataFrame {
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        
+        /* Progress bar */
+        .stProgress>div>div>div {
+            background: linear-gradient(90deg, #4B8BBE 0%, #306998 100%);
+        }
+        
+        /* Custom tabs */
+        .st-eb {
+            gap: 0.5rem;
+        }
+        
+        .st-eb button {
+            border-radius: 6px !important;
+            padding: 0.5rem 1rem !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -120,13 +223,24 @@ def to_csv_download(data: list, headers: list, filename: str, label: str):
         data=csv,
         file_name=filename,
         mime="text/csv",
-        help=f"Download {filename}"
+        help=f"Download {filename}",
+        key=f"dl_{filename}"
     )
 
 def connect_to_tableau(auth, server_url):
     server = TSC.Server(server_url, use_server_version=True)
     server.auth.sign_in(auth)
     return server
+
+def show_connection_status(server):
+    with st.expander("🔌 Connection Status", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Server", server.server_address)
+            st.metric("Site", auth.site_id or "Default")
+        with col2:
+            st.metric("API Version", server.version)
+            st.metric("User", getattr(auth, 'username', 'PAT User'))
 
 # ------------------------
 # Export Functions
@@ -177,14 +291,16 @@ def download_workbooks(auth, server_url):
             server = connect_to_tableau(auth, server_url)
             st.toast("✅ Connection established successfully!", icon="✅")
         
-        # Display connection info in expander
-        with st.expander("ℹ️ Connection Details", expanded=False):
-            st.write(f"Connected to: {server.server_address}")
-            st.write(f"Site: {auth.site_id or 'Default'}")
-            st.write(f"User: {getattr(auth, 'username', 'PAT User')}")
+        show_connection_status(server)
 
         # Download options section
-        st.markdown("### 📥 Download Options")
+        st.markdown("""
+        <div class="colored-header">
+            <h2>📥 Download Options</h2>
+            <p>Select how you want to download workbooks from Tableau Server</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
         download_option = st.radio(
             "Select download scope:",
             ["Download all workbooks from a project", 
@@ -298,12 +414,14 @@ def _download_single_workbook(server, project_name):
         workbook = next(w for w in project_workbooks if w.name == selected_workbook)
         
         # Show workbook metadata
-        with st.expander("📊 Workbook Details"):
-            st.write(f"**Name:** {workbook.name}")
-            st.write(f"**Owner:** {workbook.owner_id}")
-            st.write(f"**Created:** {workbook.created_at}")
-            st.write(f"**Last Updated:** {workbook.updated_at}")
-            st.write(f"**Size:** {getattr(workbook, 'size', 'N/A')}")
+        with st.expander("📊 Workbook Details", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Name", workbook.name)
+                st.metric("Owner", workbook.owner_id)
+            with col2:
+                st.metric("Created", workbook.created_at)
+                st.metric("Last Updated", workbook.updated_at)
         
         if st.button("🚀 Download Workbook", type="primary"):
             with st.spinner(f"⏳ Downloading '{selected_workbook}'..."):
@@ -328,7 +446,12 @@ def _download_single_workbook(server, project_name):
 
 def _search_and_download_workbooks(server, project_name):
     """Helper function for search and download functionality"""
-    st.markdown("### 🔍 Search Workbooks")
+    st.markdown("""
+    <div class="colored-header">
+        <h2>🔍 Search Workbooks</h2>
+        <p>Find and download specific workbooks by name</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     search_query = st.text_input(
         "Search by workbook name:",
@@ -354,10 +477,16 @@ def _search_and_download_workbooks(server, project_name):
         # Display workbook list with checkboxes
         selected_workbooks = []
         for wb in project_workbooks:
-            if st.checkbox(
-                f"{wb.name} (Updated: {wb.updated_at})",
-                key=f"wb_{wb.id}"
-            ):
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                selected = st.checkbox("Select", key=f"cb_{wb.id}")
+            with col2:
+                with st.expander(f"{wb.name} (Updated: {wb.updated_at})"):
+                    st.write(f"**Owner:** {wb.owner_id}")
+                    st.write(f"**Project:** {wb.project_name}")
+                    st.write(f"**Created:** {wb.created_at}")
+            
+            if selected:
                 selected_workbooks.append(wb)
         
         if selected_workbooks and st.button(
@@ -393,8 +522,7 @@ def _search_and_download_workbooks(server, project_name):
 # ------------------------
 # Main App Logic
 # ------------------------
-def main():
-    # App Header
+def show_welcome():
     st.markdown("""
     <div class="main-header">
         <div class="title-section">
@@ -403,19 +531,59 @@ def main():
         </div>
     </div>
     """, unsafe_allow_html=True)
+    
     st.markdown("---")
+    
+    # Feature cards
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        <div class="feature-card">
+            <h3>📤 Export Content</h3>
+            <p>Export users, groups, projects, workbooks, and datasources from your Tableau Server to CSV for analysis and migration planning.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="feature-card">
+            <h3>🔄 Convert User Format</h3>
+            <p>Convert Excel user exports from Tableau Server to the CSV format required for user imports.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col2:
+        st.markdown("""
+        <div class="feature-card">
+            <h3>📥 Import Users/Groups</h3>
+            <p>Upload CSV files to import users or groups to your Tableau Server, streamlining user management.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="feature-card">
+            <h3>⬇️ Download Workbooks</h3>
+            <p>Download workbooks from Tableau Server for backup, migration, or local analysis.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.info("💡 Select an operation from the sidebar to get started")
 
+def main():
     # Sidebar Navigation
     with st.sidebar:
         st.markdown("""
         <div class="sidebar-header">
-            <h2>Navigation</h2>
+            <h2>Tableau Migration Toolkit</h2>
         </div>
         """, unsafe_allow_html=True)
         
+        st.image("https://www.tableau.com/sites/default/files/2021-06/tableau-logo.png", width=150)
+        
         mode = st.radio(
             "Select Operation",
-            ["📤 Export Content", 
+            ["🏠 Dashboard",
+             "📤 Export Content", 
              "📥 Import Users/Groups", 
              "🔄 Convert User Format",
              "⬇️ Download Workbooks",
@@ -427,10 +595,15 @@ def main():
         
         st.markdown("""
         <div class="sidebar-footer">
-            <p class="version">Version 2.0</p>
+            <p class="version">Version 2.1</p>
             <p class="author">Developed by MS</p>
         </div>
         """, unsafe_allow_html=True)
+
+    # Show welcome dashboard if selected
+    if mode == "🏠 Dashboard":
+        show_welcome()
+        return
 
     # Connection Manager (for modes that need Tableau connection)
     if mode in ["📤 Export Content", "📥 Import Users/Groups", "⬇️ Download Workbooks", "⬆️ Upload Workbooks"]:
@@ -474,38 +647,57 @@ def main():
             st.markdown("""
             <div class="colored-header">
                 <h2>Export Options</h2>
-                <p>Select what you want to export</p>
+                <p>Select what you want to export from Tableau Server</p>
             </div>
             """, unsafe_allow_html=True)
             
+            # Export cards in a grid
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                if st.button("👥 Export Users", help="Export all users with their roles and details"):
-                    export_users(server)
+                with st.container():
+                    st.markdown("### 👥 Users")
+                    st.write("Export all users with their roles and details")
+                    if st.button("Export Users", key="export_users"):
+                        export_users(server)
             
             with col2:
-                if st.button("👪 Export Groups", help="Export all groups with their IDs"):
-                    export_groups(server)
+                with st.container():
+                    st.markdown("### 👪 Groups")
+                    st.write("Export all groups with their IDs")
+                    if st.button("Export Groups", key="export_groups"):
+                        export_groups(server)
             
             with col3:
-                if st.button("📂 Export Projects", help="Export all projects with descriptions"):
-                    export_projects(server)
+                with st.container():
+                    st.markdown("### 📂 Projects")
+                    st.write("Export all projects with descriptions")
+                    if st.button("Export Projects", key="export_projects"):
+                        export_projects(server)
             
             col4, col5, col6 = st.columns(3)
             
             with col4:
-                if st.button("📊 Export Workbooks", help="Export workbook metadata"):
-                    export_workbooks(server)
+                with st.container():
+                    st.markdown("### 📊 Workbooks")
+                    st.write("Export workbook metadata")
+                    if st.button("Export Workbooks", key="export_workbooks"):
+                        export_workbooks(server)
             
             with col5:
-                if st.button("📈 Export Datasources", help="Export datasource metadata"):
-                    export_datasources(server)
+                with st.container():
+                    st.markdown("### 📈 Datasources")
+                    st.write("Export datasource metadata")
+                    if st.button("Export Datasources", key="export_datasources"):
+                        export_datasources(server)
             
             with col6:
-                if st.button("🔄 Refresh Connection", help="Reconnect to Tableau Server"):
-                    server.auth.sign_out()
-                    st.experimental_rerun()
+                with st.container():
+                    st.markdown("### 🔄 Connection")
+                    st.write("Refresh the server connection")
+                    if st.button("Refresh Connection", key="refresh_connection"):
+                        server.auth.sign_out()
+                        st.experimental_rerun()
             
             server.auth.sign_out()
             st.info("🔒 Connection closed successfully")
@@ -517,7 +709,7 @@ def main():
         st.markdown("""
         <div class="colored-header">
             <h2>Import Content</h2>
-            <p>Upload your CSV files to import users or groups</p>
+            <p>Upload your CSV files to import users or groups to Tableau Server</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -537,7 +729,7 @@ def main():
             st.success("✅ File uploaded successfully")
             df = pd.read_csv(uploaded_file)
             
-            with st.expander("📋 Preview Data"):
+            with st.expander("📋 Preview Data", expanded=True):
                 st.dataframe(df.head())
             
             if st.button(f"🚀 Import {import_type}", type="primary"):
@@ -600,7 +792,7 @@ def main():
             st.success("✅ File uploaded successfully")
             df = pd.read_excel(uploaded_file)
             
-            with st.expander("📋 Preview Original Data"):
+            with st.expander("📋 Preview Original Data", expanded=True):
                 st.dataframe(df.head())
             
             if st.button("🔃 Convert to CSV", type="primary"):
@@ -660,8 +852,16 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        st.warning("⚠️ Workbook upload functionality is not yet implemented")
-        st.info("This feature will be available in the next version")
+        st.warning("⚠️ Workbook upload functionality is coming soon!")
+        st.info("""
+        This feature will allow you to:
+        - Upload workbooks to specific projects
+        - Set permissions during upload
+        - Overwrite existing workbooks
+        - Monitor upload progress
+        
+        Check back in the next version for this functionality!
+        """)
 
 # ------------------------
 # Run the App
