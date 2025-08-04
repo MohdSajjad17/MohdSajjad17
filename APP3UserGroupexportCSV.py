@@ -25,7 +25,7 @@ mode = st.radio("📁 Select Mode", [
 st.markdown("---")
 
 # ------------------------
-# Connection Details (Only show for modes that need Tableau connection)
+# Connection Details
 # ------------------------
 if mode in ["Export Tableau Content", "Import Users & Groups", "Download Workbooks", "Upload Workbooks"]:
     st.subheader("🖥️ Tableau Connection Details")
@@ -257,73 +257,57 @@ def convert_excel_to_csv(uploaded_file):
 # ------------------------
 # Download Workbooks Logic
 # ------------------------
-def download_workbooks(auth):
+def download_workbooks(auth, project_filter=None, workbook_filter=None):
     try:
         with st.spinner("🔄 Connecting to Tableau..."):
             server = connect_to_tableau(auth)
         st.success("✅ Connected successfully!")
 
-        download_option = st.radio(
-            "Select Download Option",
-            ["Download All Workbooks from a Project", "Download Specific Workbook"]
-        )
-
+        # Get all projects
         projects, _ = server.projects.get()
-        project_names = [p.name for p in projects]
-        selected_project = st.selectbox("Select Project", project_names)
+        
+        # Apply project filter if specified
+        if project_filter:
+            projects = [p for p in projects if project_filter.lower() in p.name.lower()]
+        
+        if not projects:
+            st.warning("No projects found matching your criteria")
+            return
 
-        if download_option == "Download All Workbooks from a Project":
-            with st.spinner(f"🔄 Getting workbooks from project {selected_project}..."):
-                workbooks, _ = server.workbooks.get()
-                project_workbooks = [w for w in workbooks if w.project_name == selected_project]
-            
-            if not project_workbooks:
-                st.warning(f"No workbooks found in project '{selected_project}'")
-                return
-
-            st.success(f"Found {len(project_workbooks)} workbooks in project '{selected_project}'")
-            
-            for wb in project_workbooks:
-                try:
-                    workbook_path = server.workbooks.download(wb.id)
-                    with open(workbook_path, 'rb') as f:
-                        workbook_data = f.read()
-                    
-                    st.download_button(
-                        label=f"⬇️ Download {wb.name}",
-                        data=workbook_data,
-                        file_name=f"{wb.name}.twbx",
-                        mime="application/octet-stream"
-                    )
-                    os.remove(workbook_path)
-                except Exception as e:
-                    st.error(f"Failed to download {wb.name}: {str(e)}")
-
-        else:  # Download Specific Workbook
+        # Get workbooks for each project
+        all_workbooks = []
+        for project in projects:
             workbooks, _ = server.workbooks.get()
-            project_workbooks = [w for w in workbooks if w.project_name == selected_project]
+            project_workbooks = [w for w in workbooks if w.project_name == project.name]
             
-            if not project_workbooks:
-                st.warning(f"No workbooks found in project '{selected_project}'")
-                return
+            # Apply workbook filter if specified
+            if workbook_filter:
+                project_workbooks = [w for w in project_workbooks if workbook_filter.lower() in w.name.lower()]
+            
+            all_workbooks.extend(project_workbooks)
 
-            workbook_names = [w.name for w in project_workbooks]
-            selected_workbook = st.selectbox("Select Workbook", workbook_names)
-            
-            with st.spinner(f"🔄 Downloading {selected_workbook}..."):
-                workbook = next(w for w in project_workbooks if w.name == selected_workbook)
-                workbook_path = server.workbooks.download(workbook.id)
-                
+        if not all_workbooks:
+            st.warning("No workbooks found matching your criteria")
+            return
+
+        st.success(f"Found {len(all_workbooks)} workbooks matching your criteria")
+        
+        # Download all matching workbooks
+        for wb in all_workbooks:
+            try:
+                workbook_path = server.workbooks.download(wb.id)
                 with open(workbook_path, 'rb') as f:
                     workbook_data = f.read()
                 
                 st.download_button(
-                    label=f"⬇️ Download {selected_workbook}",
+                    label=f"⬇️ Download {wb.name} (Project: {wb.project_name})",
                     data=workbook_data,
-                    file_name=f"{selected_workbook}.twbx",
+                    file_name=f"{wb.name}.twbx",
                     mime="application/octet-stream"
                 )
                 os.remove(workbook_path)
+            except Exception as e:
+                st.error(f"Failed to download {wb.name}: {str(e)}")
 
         server.auth.sign_out()
         st.info("🔐 Signed out successfully.")
@@ -334,29 +318,32 @@ def download_workbooks(auth):
 # ------------------------
 # Upload Workbooks Logic
 # ------------------------
-def upload_workbooks(auth):
+def upload_workbooks(auth, project_name=None):
     try:
         with st.spinner("🔄 Connecting to Tableau..."):
             server = connect_to_tableau(auth)
         st.success("✅ Connected successfully!")
 
-        # Get list of projects
-        projects, _ = server.projects.get()
-        project_names = [p.name for p in projects]
-        
-        # Upload options
-        upload_option = st.radio(
-            "Upload Option",
-            ["Upload to Existing Project", "Create New Project and Upload"]
-        )
-
-        if upload_option == "Upload to Existing Project":
+        # Get or create project
+        if project_name:
+            projects, _ = server.projects.get()
+            existing_project = next((p for p in projects if p.name.lower() == project_name.lower()), None)
+            
+            if existing_project:
+                project_id = existing_project.id
+                st.info(f"Using existing project: {project_name}")
+            else:
+                new_project = TSC.ProjectItem(name=project_name)
+                project = server.projects.create(new_project)
+                project_id = project.id
+                st.success(f"Created new project: {project_name}")
+        else:
+            projects, _ = server.projects.get()
+            project_names = [p.name for p in projects]
             selected_project = st.selectbox("Select Project", project_names)
             project_id = next(p.id for p in projects if p.name == selected_project)
-        else:
-            new_project_name = st.text_input("New Project Name")
-            project_id = None
 
+        # File upload
         uploaded_files = st.file_uploader(
             "📤 Upload Workbook Files (.twbx or .twb)",
             type=["twbx", "twb"],
@@ -364,16 +351,6 @@ def upload_workbooks(auth):
         )
 
         if uploaded_files and st.button("🚀 Upload Workbooks"):
-            if upload_option == "Create New Project and Upload":
-                if not new_project_name:
-                    st.error("Please enter a project name")
-                    return
-                
-                new_project = TSC.ProjectItem(name=new_project_name)
-                project = server.projects.create(new_project)
-                project_id = project.id
-                st.success(f"Created new project: {new_project_name}")
-
             for uploaded_file in uploaded_files:
                 try:
                     file_name = uploaded_file.name
@@ -385,7 +362,10 @@ def upload_workbooks(auth):
                         f.write(file_content)
                     
                     # Upload to server
-                    new_workbook = TSC.WorkbookItem(project_id=project_id, name=os.path.splitext(file_name)[0])
+                    new_workbook = TSC.WorkbookItem(
+                        project_id=project_id, 
+                        name=os.path.splitext(file_name)[0]
+                    )
                     new_workbook = server.workbooks.publish(
                         new_workbook,
                         temp_path,
@@ -439,19 +419,41 @@ elif mode == "Convert User Excel to User CSV":
 
 elif mode == "Download Workbooks":
     st.subheader("📥 Download Workbooks from Tableau Server")
-    st.markdown("Download workbooks from your Tableau Server/Cloud")
+    
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        project_filter = st.text_input("Filter by Project Name (leave empty for all)")
+    with col2:
+        workbook_filter = st.text_input("Filter by Workbook Name (leave empty for all)")
+    
+    st.markdown("---")
+    st.subheader("🔐 Tableau Credentials")
     
     auth = get_tableau_auth()
-    if st.button("🔍 Connect and Browse Workbooks"):
-        download_workbooks(auth)
+    if st.button("🔍 Connect and Download Workbooks"):
+        download_workbooks(auth, project_filter, workbook_filter)
 
 elif mode == "Upload Workbooks":
     st.subheader("📤 Upload Workbooks to Tableau Server")
-    st.markdown("Upload workbooks from your local machine to Tableau Server/Cloud")
+    
+    # Project selection
+    project_option = st.radio(
+        "Project Selection",
+        ["Select existing project", "Create new project"],
+        index=0
+    )
+    
+    project_name = None
+    if project_option == "Create new project":
+        project_name = st.text_input("New Project Name")
+    
+    st.markdown("---")
+    st.subheader("🔐 Tableau Credentials")
     
     auth = get_tableau_auth()
-    if st.button("🔍 Connect and Prepare Upload"):
-        upload_workbooks(auth)
+    if st.button("🔍 Connect and Upload Workbooks"):
+        upload_workbooks(auth, project_name)
 
 # ------------------------
 # Footer
