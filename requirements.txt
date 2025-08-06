@@ -14,4 +14,3 @@ openpyxl
 xlsxwriter
 python-dateutil
 numpy
-time
