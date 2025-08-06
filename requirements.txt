@@ -15,4 +15,3 @@ xlsxwriter
 python-dateutil
 numpy
 time
-base64
