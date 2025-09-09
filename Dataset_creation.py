@@ -5,6 +5,7 @@ import json
 from openai import OpenAI
 import io
 import time
+import random
 
 # Set up the page
 st.set_page_config(
@@ -21,11 +22,6 @@ st.markdown("""
         font-size: 3rem;
         color: #1f77b4;
         text-align: center;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #ff7f0e;
         margin-bottom: 1rem;
     }
     .info-box {
@@ -70,128 +66,145 @@ st.markdown("""
 # Initialize OpenAI client with the provided API key
 client = OpenAI(api_key='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')
 
-# Sidebar for user input
-with st.sidebar:
-    st.markdown('<h2 class="sub-header">⚙️ Configuration</h2>', unsafe_allow_html=True)
-    
-    # Example prompts for user selection
-    example_prompts = {
-        "E-commerce Sales": "Generate synthetic sales data for an e-commerce platform. Include fields for date, customer_id (Customer ###), product_id, product_name, quantity, order total (in $USD). For certain orders, the order total should be negative to represent returns.",
-        "User Demographics": "Generate synthetic user demographic data. Include fields for user_id, age, gender, location, income_level, education, and signup_date.",
-        "Website Analytics": "Generate synthetic website analytics data. Include fields for date, page_views, unique_visitors, bounce_rate, avg_session_duration, and conversions.",
-        "Custom": "Enter your own custom prompt below"
-    }
-    
-    selected_prompt = st.selectbox(
-        "Select a prompt type:",
-        options=list(example_prompts.keys())
-    )
-    
-    # Text area for prompt input
-    if selected_prompt == "Custom":
-        user_prompt = st.text_area(
-            "Enter your custom prompt:",
-            height=150,
-            help="Be specific about the data you want to generate. Include fields, formats, and any special requirements."
-        )
-    else:
-        user_prompt = st.text_area(
-            "Edit the prompt if needed:",
-            value=example_prompts[selected_prompt],
-            height=150,
-            help="Be specific about the data you want to generate. Include fields, formats, and any special requirements."
-        )
-    
-    # Number of rows input
-    st.markdown("### Number of Rows")
-    num_rows = st.number_input(
-        "Enter the number of rows to generate:",
-        min_value=1,
-        max_value=5000,
-        value=10,
-        step=1,
-        help="For large datasets (1000+ rows), generation may take longer."
-    )
-    
-    # Batch size for large datasets
-    if num_rows > 100:
-        batch_size = st.slider(
-            "Batch size for generation:",
-            min_value=50,
-            max_value=500,
-            value=min(200, num_rows),
-            step=50,
-            help="For large datasets, generating in batches can be more reliable."
-        )
-    else:
-        batch_size = num_rows
-    
-    # Format selection for download
-    st.markdown("### Download Format")
-    download_format = st.radio("Select download format:", ["CSV", "Excel"], horizontal=True)
-    
-    # Generate button
-    generate_button = st.button("Generate Data", type="primary")
+# Main input area
+st.markdown("### 📝 Enter Your Data Requirements")
+user_prompt = st.text_area(
+    "Describe the data you want to generate:",
+    height=100,
+    placeholder="e.g., Generate synthetic sales data with fields for date, customer_id, product_id, quantity, and order total. Include some negative values for returns.",
+    help="Be specific about the fields, formats, and any special requirements."
+)
 
-# Function to generate data in batches
-def generate_data_in_batches(prompt, total_rows, batch_size):
+# Number of rows input
+st.markdown("### 🔢 Number of Rows")
+num_rows = st.number_input(
+    "Enter the number of rows to generate:",
+    min_value=1,
+    max_value=10000,
+    value=100,
+    step=1,
+    help="For large datasets (1000+ rows), generation may take longer."
+)
+
+# Format selection for download
+st.markdown("### 📥 Download Format")
+download_format = st.radio("Select download format:", ["CSV", "Excel"], horizontal=True)
+
+# Generate button
+generate_button = st.button("Generate Data", type="primary")
+
+# Function to generate a template with structure
+def generate_data_structure(prompt):
+    """Generate a data structure template from the prompt"""
+    structure_prompt = f"""
+    Based on the following prompt: "{prompt}"
+    
+    Please respond with ONLY a JSON object that defines the structure of the data. 
+    The JSON should have a "fields" key with an array of field names and their types.
+    Example:
+    {{
+      "fields": [
+        {{"name": "date", "type": "date"}},
+        {{"name": "customer_id", "type": "string"}},
+        {{"name": "order_total", "type": "number"}}
+      ]
+    }}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": structure_prompt}],
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(response.choices[0].message.content)
+    except:
+        # Fallback structure if API call fails
+        return {
+            "fields": [
+                {"name": "id", "type": "number"},
+                {"name": "value", "type": "number"}
+            ]
+        }
+
+# Function to generate sample data based on structure
+def generate_sample_data(structure, num_samples=10):
+    """Generate a small sample of data based on the structure"""
+    sample_prompt = f"""
+    Based on this data structure: {json.dumps(structure)}
+    
+    Generate {num_samples} sample records that match this structure.
+    Return ONLY a JSON object with a "data" key containing an array of records.
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": sample_prompt}],
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result.get("data", [])
+    except:
+        # Fallback data if API call fails
+        return [{"id": i, "value": i * 10} for i in range(1, num_samples + 1)]
+
+# Function to generate large dataset efficiently
+def generate_large_dataset(structure, sample_data, num_rows):
+    """Generate a large dataset by extrapolating from sample data"""
     all_data = []
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Calculate number of batches
-    num_batches = (total_rows + batch_size - 1) // batch_size
-    
-    for batch in range(num_batches):
-        # Calculate rows for this batch
-        rows_in_batch = min(batch_size, total_rows - batch * batch_size)
-        
-        # Update progress
-        progress = (batch * batch_size) / total_rows
-        progress_bar.progress(progress)
-        status_text.text(f"Generating batch {batch+1} of {num_batches} ({rows_in_batch} rows)...")
-        
-        # Create batch prompt
-        batch_prompt = f"{prompt} Generate data for {rows_in_batch} records. Output in JSON form."
-        
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": batch_prompt}],
-                response_format={"type": "json_object"}
-            )
+    # Use the sample data as a template
+    for i in range(num_rows):
+        if i < len(sample_data):
+            # Use the actual sample data for first rows
+            record = sample_data[i]
+        else:
+            # Create new records based on sample data patterns
+            template_idx = i % len(sample_data)
+            record = {}
             
-            # Parse the response
-            generated_data = json.loads(response.choices[0].message.content)
-            
-            # Find the data key (OpenAI might return different structures)
-            data_key = None
-            for key in generated_data.keys():
-                if isinstance(generated_data[key], list):
-                    data_key = key
-                    break
-            
-            if data_key:
-                batch_data = generated_data[data_key]
-            else:
-                # If no obvious key found, use the first list we find
-                for value in generated_data.values():
-                    if isinstance(value, list):
-                        batch_data = value
-                        break
+            for field in structure["fields"]:
+                field_name = field["name"]
+                field_type = field.get("type", "string")
+                
+                if field_name in sample_data[template_idx]:
+                    # Use the sample value as a base
+                    base_value = sample_data[template_idx][field_name]
+                    
+                    if field_type == "number":
+                        # Vary numeric values
+                        if isinstance(base_value, (int, float)):
+                            variation = random.uniform(-0.5, 0.5) * base_value
+                            record[field_name] = base_value + variation
+                        else:
+                            record[field_name] = i
+                    elif field_type == "date":
+                        # Vary dates
+                        record[field_name] = f"2023-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}"
+                    else:
+                        # Vary string values
+                        record[field_name] = f"{base_value}_{i}"
                 else:
-                    # If no list found, use the entire response as a single record
-                    batch_data = [generated_data]
-            
-            # Add to all data
-            all_data.extend(batch_data)
-            
-            # Small delay to avoid rate limiting
-            time.sleep(0.5)
-            
-        except Exception as e:
-            st.error(f"Error generating batch {batch+1}: {str(e)}")
-            break
+                    # Create new field value
+                    if field_type == "number":
+                        record[field_name] = i
+                    elif field_type == "date":
+                        record[field_name] = f"2023-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}"
+                    else:
+                        record[field_name] = f"value_{i}"
+        
+        all_data.append(record)
+        
+        # Update progress every 100 rows
+        if i % 100 == 0:
+            progress = i / num_rows
+            progress_bar.progress(progress)
+            status_text.text(f"Generating row {i} of {num_rows}...")
     
     # Complete progress bar
     progress_bar.progress(1.0)
@@ -206,53 +219,27 @@ if generate_button:
     else:
         with st.spinner("Generating synthetic data... This may take a moment."):
             try:
-                # For large datasets, generate in batches
-                if num_rows > 100:
-                    data = generate_data_in_batches(user_prompt, num_rows, batch_size)
-                else:
-                    # For smaller datasets, generate in one go
-                    final_prompt = f"{user_prompt} Generate data for {num_rows} records. Output in JSON form."
-                    
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": final_prompt}],
-                        response_format={"type": "json_object"}
-                    )
-                    
-                    # Parse the response
-                    generated_data = json.loads(response.choices[0].message.content)
-                    
-                    # Find the data key (OpenAI might return different structures)
-                    data_key = None
-                    for key in generated_data.keys():
-                        if isinstance(generated_data[key], list):
-                            data_key = key
-                            break
-                    
-                    if data_key:
-                        data = generated_data[data_key]
-                    else:
-                        # If no obvious key found, use the first list we find
-                        for value in generated_data.values():
-                            if isinstance(value, list):
-                                data = value
-                                break
-                        else:
-                            # If no list found, use the entire response as a single record
-                            data = [generated_data]
+                # Step 1: Generate data structure
+                st.info("Step 1: Analyzing your data requirements...")
+                structure = generate_data_structure(user_prompt)
+                
+                # Step 2: Generate sample data
+                st.info("Step 2: Creating sample data pattern...")
+                sample_size = min(50, num_rows)  # Generate up to 50 samples
+                sample_data = generate_sample_data(structure, sample_size)
+                
+                # Step 3: Generate full dataset
+                st.info(f"Step 3: Generating {num_rows} rows of data...")
+                data = generate_large_dataset(structure, sample_data, num_rows)
                 
                 # Convert to DataFrame
                 df = pd.DataFrame(data)
-                
-                # If we got more rows than requested, trim the dataset
-                if len(df) > num_rows:
-                    df = df.head(num_rows)
                 
                 # Display success message
                 st.success(f"Data generated successfully! Created {len(df)} rows.")
                 
                 # Display the data
-                st.markdown('<h2 class="sub-header">📋 Generated Data</h2>', unsafe_allow_html=True)
+                st.markdown('### 📋 Generated Data Preview')
                 
                 # For large datasets, show a sample instead of the full dataset
                 if len(df) > 100:
@@ -274,7 +261,7 @@ if generate_button:
                 
                 # Download section
                 st.markdown('<div class="download-section">', unsafe_allow_html=True)
-                st.markdown('<h3 class="sub-header">💾 Download Data</h3>', unsafe_allow_html=True)
+                st.markdown('### 💾 Download Data')
                 
                 if download_format == "CSV":
                     csv = df.to_csv(index=False)
@@ -311,36 +298,17 @@ with st.expander("💡 How to get the best results"):
     ### Tips for effective prompts:
     
     1. **Be specific** about the data fields you want (e.g., "Include customer_id, name, email, and purchase_history")
-    2. **Specify the format** (e.g., "Output in JSON with 'users' as the main key")
+    2. **Specify the format** (e.g., "Dates should be in YYYY-MM-DD format")
     3. **Mention any constraints** (e.g., "Ages should be between 18 and 65", "Include some negative values for returns")
     4. **Define the scope** (e.g., "Generate data for the last 6 months")
-    5. **Include examples** if you have specific formatting needs
-    
-    ### For large datasets (1000+ rows):
-    - The app will generate data in batches to improve reliability
-    - You can adjust the batch size in the sidebar
-    - Generation may take several minutes for very large datasets
     
     ### Example prompts:
     - "Generate synthetic e-commerce data with fields for order_id, customer_id, product_id, quantity, price, and order_date. Include some returns (negative values)."
-    - "Create synthetic user data with id, name, email, age, country, and subscription_date for users from various countries."
-    - "Generate website analytics data with date, visitors, page_views, bounce_rate, and conversion_rate for a period."
+    - "Create synthetic user data with id, name, email, age, country, and subscription_date."
+    - "Generate website analytics data with date, visitors, page_views, bounce_rate, and conversion_rate."
     """)
 
 # Footer
 st.markdown("---")
 st.markdown("### 🔒 Privacy Note")
 st.markdown("Your API key is embedded in the code and not shared with anyone. The generated data is synthetic and doesn't contain real user information.")
-
-# Instructions for running the app
-with st.expander("ℹ️ How to run this app"):
-    st.markdown("""
-    This app is built with Streamlit and uses the OpenAI API to generate synthetic data.
-    
-    To run this app locally:
-    1. Save this code to a Python file (e.g., `synthetic_data_app.py`)
-    2. Install required packages: `pip install streamlit openai pandas openpyxl`
-    3. Run the app: `streamlit run synthetic_data_app.py`
-    
-    The app will open in your default web browser.
-    """)
