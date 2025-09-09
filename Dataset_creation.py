@@ -7,7 +7,7 @@ import io
 from openai import OpenAI
 
 # Initialize OpenAI client
-client = OpenAI(api_key="your_openai_api_key_here")  # 🔐 Replace with your key
+client = OpenAI(api_key="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")  # 🔐 Replace with your key
 
 # Streamlit page config
 st.set_page_config(
